@@ -1,0 +1,9 @@
+# Dependências e arquivos temporários
+node_modules/
+.wrangler/
+.dev.vars*
+
+# Configuração e dados pessoais (ficam só no seu computador)
+wrangler.jsonc
+seed.local.sql
+*-log.txt

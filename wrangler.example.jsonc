@@ -1,0 +1,27 @@
+// Modelo de configuração. O setup.bat copia este arquivo para wrangler.jsonc
+// (que fica só no seu computador) e preenche o database_id automaticamente.
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "cotador",
+  "main": "src/worker.js",
+  "compatibility_date": "2025-09-01",
+  "workers_dev": true,
+  "preview_urls": false,
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "cotador",
+      "database_id": "PREENCHIDO_PELO_SETUP"
+    }
+  ],
+  // Domínio próprio (opcional). Para usar, tire as barras do começo das linhas abaixo,
+  // troque pelo seu subdomínio e mude "workers_dev" para false.
+  // "routes": [
+  //   { "pattern": "cotador.seudominio.com.br", "custom_domain": true, "zone_name": "seudominio.com.br" }
+  // ],
+  "observability": { "enabled": true }
+}
