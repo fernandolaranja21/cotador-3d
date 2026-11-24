@@ -1,0 +1,282 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<style>:root{color-scheme:light}body{margin:0;font:14px system-ui,sans-serif}[hidden]{display:none!important}</style>
+<title>Catálogo · Cotador 3D</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="/app.css">
+<script src="/core.js"></script>
+</head>
+<body>
+<header>
+  <div class="wrap bar">
+    <a class="brand" href="/"><i aria-hidden="true"></i>Cotador 3D</a>
+    <nav class="main" id="topnav" aria-label="Plataforma"></nav>
+    <div class="status" id="status" aria-live="polite">Carregando…</div>
+  </div>
+  <nav class="wrap subbar" id="tabs" role="tablist" aria-label="Catálogo">
+    <button role="tab" data-v="produtos" aria-selected="true">Produtos</button>
+    <button role="tab" data-v="kits" aria-selected="false">Kits</button>
+  </nav>
+</header>
+
+<main class="wrap">
+  <div id="banner" class="banner" hidden></div>
+  <div id="stale" class="banner" hidden></div>
+
+  <section id="v-produtos" class="sect">
+    <div><h1>Produtos</h1><p class="lead">Cada peça impressa que você vende, com o custo calculado pelas mesmas regras do cotador. Publicados aparecem na área do vendedor só com o preço de venda.</p></div>
+    <div class="toolbar">
+      <input type="search" id="q-prod" placeholder="Buscar produto" aria-label="Buscar produto">
+      <select id="c-prod" aria-label="Categoria"></select>
+      <span class="grow"></span>
+      <button class="btn pri" id="newProd" type="button">+ Novo produto</button>
+    </div>
+    <div class="cards" id="g-prod"></div>
+  </section>
+
+  <section id="v-kits" class="sect" hidden>
+    <div><h1>Kits</h1><p class="lead">Junte produtos (por exemplo: bandeja + 3 enfeites de Natal). O custo soma as peças, a embalagem e o tempo de montar; o preço sai pela margem escolhida.</p></div>
+    <div class="toolbar">
+      <input type="search" id="q-kit" placeholder="Buscar kit" aria-label="Buscar kit">
+      <select id="c-kit" aria-label="Categoria"></select>
+      <span class="grow"></span>
+      <button class="btn pri" id="newKit" type="button">+ Novo kit</button>
+    </div>
+    <div class="cards" id="g-kit"></div>
+  </section>
+</main>
+
+<dialog id="dlg"><form method="dialog" class="dlg" id="dlgForm" novalidate></form></dialog>
+<datalist id="cats"></datalist>
+
+<script>
+(function(){
+const {$,$$,brl,nf,P,Z,show,esc,db,withDef,prodPrices,kitCalc,ARRED,roundPrice,margemDe,filKg,filNome,fileToJpeg,fotoUrl,toast,setStatus,banner,arm}=C3;
+let cfg=withDef(),fils=[],prods=[],kits=[],cat=[];
+let view='produtos';
+
+/* ---------- carga ---------- */
+async function load(){
+  try{
+    const [c,f,p,k,ct]=await Promise.all([db.get('config','geral'),db.list('filamentos'),db.list('produtos'),db.list('kits'),db.list('catalogo')]);
+    cfg=withDef(c);fils=f;prods=p;kits=k;cat=ct;setStatus('Tudo salvo');banner('');render();checkStale();
+  }catch(e){banner(e.status===403?'Sem acesso a esta página.':'Não foi possível carregar os dados. Recarregue a página.');setStatus('Erro de conexão')}
+}
+const prodById=()=>new Map(prods.map(p=>[p.id,p]));
+const cats=()=>[...new Set([...prods,...kits].map(x=>(x.categoria||'').trim()).filter(Boolean))].sort();
+
+/* ---------- publicação (o que o vendedor enxerga) ---------- */
+function desired(){
+  const out=new Map(),pm=prodById();
+  prods.filter(p=>p.publicado).forEach(p=>{const r=prodPrices(p,cfg,fils);
+    out.set(p.id,{tipo:'produto',nome:p.nome||'Sem nome',descricao:p.descricao||'',categoria:p.categoria||'',fotoId:p.fotoId||'',preco:r.preco,precoKit:r.precoKit,prazoDias:p.prazoDias||'',ordem:Z(p.ordem)})});
+  kits.filter(k=>k.publicado).forEach(k=>{const r=kitCalc(k,pm,cfg,fils);
+    out.set(k.id,{tipo:'kit',nome:k.nome||'Sem nome',descricao:k.descricao||'',categoria:k.categoria||'',fotoId:k.fotoId||'',preco:r.preco,
+      avulsoSoma:+r.avulsoSoma.toFixed(2),itens:r.linhas.filter(l=>!l.falta).map(l=>({produtoId:l.produtoId,nome:l.nome,qtd:l.qtd})),prazoDias:k.prazoDias||'',ordem:Z(k.ordem)})});
+  return out;
+}
+const same=(a,b)=>{const {atualizadoEm:x,id:y,...A}=a||{};const {atualizadoEm:w,id:z,...B}=b||{};return JSON.stringify(A)===JSON.stringify(B)};
+function diff(){
+  const want=desired(),have=new Map(cat.map(c=>[c.id,c]));const put=[],del=[];
+  want.forEach((v,id)=>{if(!same(v,have.get(id)))put.push([id,v])});
+  have.forEach((_,id)=>{if(!want.has(id))del.push(id)});
+  return {put,del};
+}
+async function publish(){
+  const {put,del}=diff();if(!put.length&&!del.length)return 0;
+  const now=new Date().toISOString();
+  await Promise.all([...put.map(([id,v])=>db.put('catalogo',id,{...v,atualizadoEm:now})),...del.map(id=>db.del('catalogo',id))]);
+  cat=await db.list('catalogo');checkStale();return put.length+del.length;
+}
+function checkStale(){
+  const {put,del}=diff(),n=put.length+del.length,el=$('#stale');
+  if(!n){el.hidden=true;return}
+  el.hidden=false;el.innerHTML=`${n} ${n===1?'item do catálogo do vendedor está':'itens do catálogo do vendedor estão'} diferente${n===1?'':'s'} do cálculo atual (custos ou filamentos mudaram). <button class="btn" type="button" id="pubAll">Publicar preços atuais</button>`;
+  $('#pubAll').onclick=async()=>{try{const k=await publish();toast(`Catálogo atualizado (${k})`);render()}catch(_){toast('Não foi possível publicar')}};
+}
+
+/* ---------- listas ---------- */
+function catSelect(sel,list){const v=sel.value;sel.innerHTML=`<option value="">Todas as categorias</option>`+cats().map(c=>`<option>${esc(c)}</option>`).join('');sel.value=cats().includes(v)?v:''}
+const pubMap=()=>new Map(cat.map(c=>[c.id,c]));
+function render(){
+  $('#cats').innerHTML=cats().map(c=>`<option value="${esc(c)}">`).join('');
+  catSelect($('#c-prod'));catSelect($('#c-kit'));
+  const pm=pubMap(),q1=$('#q-prod').value.toLowerCase(),c1=$('#c-prod').value;
+  const lp=prods.filter(p=>(!q1||(p.nome||'').toLowerCase().includes(q1))&&(!c1||p.categoria===c1)).sort((a,b)=>(a.nome||'').localeCompare(b.nome||''));
+  $('#g-prod').innerHTML=lp.length?lp.map(p=>{const r=prodPrices(p,cfg,fils),pub=pm.get(p.id);
+    const st=p.publicado?(pub&&Math.abs(pub.preco-r.preco)<0.005?'<span class="badge ok">Publicado</span>':'<span class="badge warn">Preço a publicar</span>'):'<span class="badge">Rascunho</span>';
+    return `<div class="card" role="button" tabindex="0" style="cursor:pointer" data-ep="${esc(p.id)}">
+      <div class="ph" style="${p.fotoId?`background-image:url('${fotoUrl(p.fotoId)}')`:''}">${p.fotoId?'':'sem foto'}</div>
+      <div class="bd"><div class="row" style="justify-content:space-between"><h3>${esc(p.nome||'Sem nome')}</h3>${st}</div>
+      <span class="meta">${esc(p.categoria||'Sem categoria')} · ${nf(r.g,1)} g · ${nf(r.h*60,0)} min/peça</span>
+      <span class="price">${brl(r.preco)}</span>
+      <span class="meta">em kit ${brl(r.precoKit)} · custo ${brl(r.avulso)} · lucro ${brl(r.lucro)}</span></div></div>`}).join('')
+    :`<div class="empty">${prods.length?'Nenhum produto com esse filtro.':'Nenhum produto ainda. Use “+ Novo produto” ou, no Cotador, “Salvar como produto do catálogo”.'}</div>`;
+  const pmap=prodById(),q2=$('#q-kit').value.toLowerCase(),c2=$('#c-kit').value;
+  const lk=kits.filter(k=>(!q2||(k.nome||'').toLowerCase().includes(q2))&&(!c2||k.categoria===c2)).sort((a,b)=>(a.nome||'').localeCompare(b.nome||''));
+  $('#g-kit').innerHTML=lk.length?lk.map(k=>{const r=kitCalc(k,pmap,cfg,fils),pub=pm.get(k.id);
+    const st=k.publicado?(pub&&Math.abs(pub.preco-r.preco)<0.005?'<span class="badge ok">Publicado</span>':'<span class="badge warn">Preço a publicar</span>'):'<span class="badge">Rascunho</span>';
+    return `<div class="card" role="button" tabindex="0" style="cursor:pointer" data-ek="${esc(k.id)}">
+      <div class="ph" style="${k.fotoId?`background-image:url('${fotoUrl(k.fotoId)}')`:''}">${k.fotoId?'':'sem foto'}</div>
+      <div class="bd"><div class="row" style="justify-content:space-between"><h3>${esc(k.nome||'Sem nome')}</h3>${st}</div>
+      <span class="meta">${r.linhas.map(l=>`${nf(l.qtd,0)}× ${esc(l.nome||'produto removido')}`).join(' · ')}</span>
+      <span class="price">${brl(r.preco)}</span>
+      <span class="meta">custo ${brl(r.custo)} · lucro ${brl(r.lucro)}${r.economia>0.01?` · cliente economiza ${brl(r.economia)}`:''}</span></div></div>`}).join('')
+    :`<div class="empty">${kits.length?'Nenhum kit com esse filtro.':prods.length?'Nenhum kit ainda. Use “+ Novo kit” e escolha os produtos.':'Cadastre os produtos primeiro; depois monte os kits com eles.'}</div>`;
+}
+['#q-prod','#c-prod','#q-kit','#c-kit'].forEach(s=>$(s).addEventListener('input',render));
+$('#g-prod').addEventListener('click',e=>{const b=e.target.closest('[data-ep]');if(b)openProd(b.dataset.ep)});
+$('#g-kit').addEventListener('click',e=>{const b=e.target.closest('[data-ek]');if(b)openKit(b.dataset.ek)});
+document.addEventListener('keydown',e=>{if(e.key!=='Enter'&&e.key!==' ')return;const c=e.target.closest&&e.target.closest('.card[role=button]');if(c){e.preventDefault();c.click()}});
+
+/* ---------- editor: peças comuns ---------- */
+const dlg=$('#dlg'),form=$('#dlgForm');
+let draft=null,kind=null,origFoto='';
+const inp=(k,label,{n=false,ph='',type='text',list=''}={})=>`<label class="f">${label}<input ${n?'class="n" inputmode="decimal"':''} type="${type}" data-f="${k}" ${list?`list="${list}"`:''} value="${esc(n?show(P(draft[k])):draft[k]??'')}" placeholder="${esc(ph)}"></label>`;
+const sel=(k,label,opts)=>`<label class="f">${label}<select data-f="${k}">${opts.map(([v,t])=>`<option value="${esc(v)}"${String(draft[k]??'')===String(v)?' selected':''}>${esc(t)}</option>`).join('')}</select></label>`;
+const fotoBlock=()=>`<div class="fotoBox"><div class="ph" id="fotoPh" style="${draft.fotoId?`background-image:url('${fotoUrl(draft.fotoId)}')`:''}"></div>
+  <div class="row"><label class="btn">Escolher foto<input type="file" accept="image/*" id="fotoIn" hidden></label>${draft.fotoId?'<button class="btn" type="button" id="fotoRm">Tirar foto</button>':''}</div></div>`;
+const margBtns=()=>`<div class="row">${cfg.margens.map(m=>`<button type="button" class="btn${Z(m)===margemDe(draft,cfg)?' pri':''}" data-mg="${Z(m)}">+${nf(Z(m),0)}%</button>`).join('')}</div>`;
+const ln=(a,b,cls='')=>`<div class="ln ${cls}"><span>${a}</span><span>${b}</span></div>`;
+form.addEventListener('submit',e=>e.preventDefault());
+form.addEventListener('click',e=>{if(e.target.closest('[data-close]'))dlg.close()});
+function bindCommon(onChange,other){
+  form.oninput=e=>{const t=e.target;if(!t.dataset.f){if(other)other(e);return}draft[t.dataset.f]=t.type==='checkbox'?t.checked:t.value;onChange(t)};
+  form.onclick=null;
+  const fi=$('#fotoIn');if(fi)fi.onchange=async()=>{const f=fi.files[0];if(!f)return;
+    try{setStatus('Enviando foto…');const data=await fileToJpeg(f);const id=db.newId();await db.put('fotos',id,{data});draft.fotoId=id;$('#fotoPh').style.backgroundImage=`url('${fotoUrl(id)}')`;setStatus('Foto enviada')}
+    catch(_){toast('Não foi possível usar essa foto');setStatus('')}};
+  const fr=$('#fotoRm');if(fr)fr.onclick=()=>{draft.fotoId='';$('#fotoPh').style.backgroundImage=''};
+}
+async function cleanupFoto(){if(origFoto&&origFoto!==draft.fotoId){try{await db.del('fotos',origFoto)}catch(_){}}}
+dlg.addEventListener('close',()=>{if(location.hash)history.replaceState(null,'',location.pathname)});
+
+/* ---------- editor de produto ---------- */
+const blankProd=()=>({nome:'',categoria:'',descricao:'',fotoId:'',publicado:false,g:'',h:'',q:1,mesas:1,impId:cfg.impressoras[0]?.id||'',filId:'',setupMin:'',acabMin:'',insUn:'',licUn:'',embUn:'',embMin:'',margem:Z(cfg.margens[1]??cfg.margens[0]),arred:'90',precoManual:'',precoKitManual:'',prazoDias:''});
+function openProd(id,preset){
+  const p=id?prods.find(x=>x.id===id):null;if(id&&!p)return;
+  kind='p';draft=p?C3.clone(p):(preset||{id:db.newId(),...blankProd()});origFoto=draft.fotoId||'';
+  const usedIn=p?kits.filter(k=>(k.itens||[]).some(i=>i.produtoId===p.id)):[];
+  form.innerHTML=`<div class="dlg-h"><h2>${p?'Editar produto':'Novo produto'}</h2><button class="x" type="button" data-close aria-label="Fechar">×</button></div>
+  <div class="dlg-b">
+    <div class="grid2">${inp('nome','Nome')}${inp('categoria','Categoria',{ph:'Natal, Páscoa, Decoração…',list:'cats'})}</div>
+    <label class="f">Descrição para o cliente<textarea data-f="descricao" rows="2">${esc(draft.descricao||'')}</textarea></label>
+    ${fotoBlock()}
+    <div class="panel" style="padding:12px"><div><span class="step">Produção</span><h2>Uma mesa típica</h2></div>
+      <p class="hint">Gramas e horas totais de uma mesa e quantas peças saem nela (do fatiador). Se cada peça é uma mesa, use 1 peça.</p>
+      <div class="grid3">${inp('g','Gramas da mesa',{n:1})}${inp('h','Horas da mesa',{n:1})}${inp('q','Peças por mesa',{n:1})}</div>
+      <div class="grid2">${sel('impId','Impressora',cfg.impressoras.map(i=>[i.id,i.nome||'Sem nome']))}
+        ${sel('filId','Filamento',[['',`Preço padrão (${brl(cfg.precoPadrao)}/kg)`],...[...fils].sort((a,b)=>Z(a.n)-Z(b.n)).map(f=>[f.id,`${filNome(f)} — ${brl(filKg(f))}/kg`])])}</div>
+      <div class="grid4">${inp('setupMin','Preparação/mesa (min)',{n:1,ph:'padrão '+show(cfg.setupMin)})}${inp('acabMin','Acabamento/peça (min)',{n:1,ph:'padrão '+show(cfg.acabMin)})}${inp('insUn','Insumos/peça (R$)',{n:1,ph:'ímã, argola…'})}${inp('licUn','Licença/peça (R$)',{n:1})}</div>
+    </div>
+    <div class="panel" style="padding:12px"><div><span class="step">Venda</span><h2>Preço</h2></div>
+      <div class="grid2">${inp('embUn','Embalagem individual (R$)',{n:1,ph:'só na venda avulsa'})}${inp('embMin','Embalar avulso (min)',{n:1,ph:'0'})}</div>
+      <label class="f">Acréscimo sobre o custo</label>${margBtns()}
+      <div class="grid3">${inp('margem','Acréscimo (%)',{n:1})}${sel('arred','Arredondar',ARRED.map(a=>[a.id,a.nome]))}${inp('prazoDias','Prazo (dias úteis)',{n:1,ph:'opcional'})}</div>
+      <div class="grid2">${inp('precoManual','Preço avulso fixo (R$)',{n:1,ph:'deixe vazio para calcular'})}${inp('precoKitManual','Preço dentro de kit fixo (R$)',{n:1,ph:'deixe vazio para calcular'})}</div>
+      <div class="lines" id="pr-res"></div>
+    </div>
+    <label class="row" style="gap:8px"><input type="checkbox" data-f="publicado" style="width:auto" ${draft.publicado?'checked':''}> Publicar na área do vendedor</label>
+    ${usedIn.length?`<p class="hint">Usado nos kits: ${usedIn.map(k=>esc(k.nome)).join(', ')}.</p>`:''}
+  </div>
+  <div class="dlg-f">${p?'<button class="btn danger left" type="button" id="del">Excluir</button><button class="btn left" type="button" id="dup">Duplicar</button>':''}<button class="btn" type="button" data-close>Cancelar</button><button class="btn pri" type="button" id="save">Salvar</button></div>`;
+  const res=()=>{const r=prodPrices(draft,cfg,fils);
+    $('#pr-res').innerHTML=ln(`Material <small>${nf(r.g,1)} g/peça · ${esc(filNome(r.fil))}</small>`,brl(r.material))+ln(`Máquina <small>${nf(r.h*60,0)} min/peça${r.imp?' · '+esc(r.imp.nome):''}</small>`,brl(r.maquina))
+      +ln('Falhas',brl(r.falha))+ln('Mão de obra (preparação + acabamento)',brl(r.mo))+(r.ins?ln('Insumos e licença',brl(r.ins)):'')
+      +ln('Custo de produção por peça',brl(r.producao),'total')+ln('custo vendida avulsa (com embalagem)',brl(r.avulso),'sub')
+      +ln(`<b>Preço avulso</b> <small>${P(draft.precoManual)>0?'fixo':'+'+nf(r.m,0)+'% e arredondado'}</small>`,`<b>${brl(r.preco)}</b>`)+ln('lucro por peça avulsa',`${brl(r.lucro)} · ${r.avulso>0?nf((r.preco/r.avulso-1)*100,0):'0'}% sobre o custo`,'sub')
+      +ln(`<b>Preço dentro de kit</b> <small>sem embalagem individual</small>`,`<b>${brl(r.precoKit)}</b>`)+ln('lucro por peça em kit',brl(r.lucroKit),'sub')
+      +(r.lucro<0||r.lucroKit<0?`<p class="chip">Preço abaixo do custo</p>`:'')};
+  bindCommon(t=>{if(t.dataset.f==='margem')$$('[data-mg]').forEach(b=>b.classList.toggle('pri',Z(b.dataset.mg)===margemDe(draft,cfg)));res()});
+  $$('[data-mg]').forEach(b=>b.onclick=()=>{draft.margem=Z(b.dataset.mg);form.querySelector('[data-f=margem]').value=show(draft.margem);$$('[data-mg]').forEach(x=>x.classList.toggle('pri',x===b));res()});
+  $('#save').onclick=async()=>{if(!(draft.nome||'').trim()){toast('Dê um nome ao produto');return}
+    try{setStatus('Salvando…');await db.put('produtos',draft.id,draft);await cleanupFoto();prods=await db.list('produtos');const n=await publish();dlg.close();render();setStatus('Tudo salvo');toast(n?'Produto salvo e catálogo atualizado':'Produto salvo')}
+    catch(_){toast('Não foi possível salvar');setStatus('Erro ao salvar')}};
+  if(p){$('#dup').onclick=()=>{const c={...C3.clone(draft),id:db.newId(),nome:draft.nome+' (cópia)',publicado:false,fotoId:''};dlg.close();openProd(null,c)};
+    $('#del').onclick=e=>arm(e.target,'delp',async()=>{if(usedIn.length){toast('Tire o produto dos kits antes de excluir');return}
+      try{await db.del('produtos',p.id);if(p.fotoId)await db.del('fotos',p.fotoId).catch(()=>{});prods=await db.list('produtos');await publish();dlg.close();render();toast('Produto excluído')}catch(_){toast('Não foi possível excluir')}})}
+  res();dlg.showModal();
+}
+
+/* ---------- editor de kit ---------- */
+const blankKit=()=>({nome:'',categoria:'',descricao:'',fotoId:'',publicado:false,itens:[],emb:'',ins:'',minMontagem:'',margem:Z(cfg.margens[1]??cfg.margens[0]),arred:'90',precoManual:'',prazoDias:''});
+function openKit(id){
+  const k=id?kits.find(x=>x.id===id):null;if(id&&!k)return;
+  kind='k';draft=k?C3.clone(k):{id:db.newId(),...blankKit()};origFoto=draft.fotoId||'';
+  form.innerHTML=`<div class="dlg-h"><h2>${k?'Editar kit':'Novo kit'}</h2><button class="x" type="button" data-close aria-label="Fechar">×</button></div>
+  <div class="dlg-b">
+    <div class="grid2">${inp('nome','Nome do kit',{ph:'Kit Natal bandeja + 3 enfeites'})}${inp('categoria','Categoria',{ph:'Natal',list:'cats'})}</div>
+    <label class="f">Descrição para o cliente<textarea data-f="descricao" rows="2">${esc(draft.descricao||'')}</textarea></label>
+    ${fotoBlock()}
+    <div class="panel" style="padding:12px"><div><span class="step">1 · Itens</span><h2>Produtos do kit</h2></div>
+      <div class="items" id="k-items"></div>
+      <input type="search" id="k-q" placeholder="Buscar produto para adicionar" aria-label="Buscar produto">
+      <div class="pick" id="k-pick"></div>
+    </div>
+    <div class="panel" style="padding:12px"><div><span class="step">2 · Montagem</span><h2>Embalagem e tempo</h2></div>
+      <div class="grid3">${inp('emb','Embalagem do kit (R$)',{n:1,ph:'caixa, saquinho…'})}${inp('ins','Insumos (R$)',{n:1,ph:'laço, tag, fita…'})}${inp('minMontagem','Montar e embalar (min)',{n:1,ph:'0'})}</div>
+    </div>
+    <div class="panel" style="padding:12px"><div><span class="step">3 · Preço</span><h2>Quanto cobrar</h2></div>
+      <div class="margins" id="k-marg"></div>
+      <div class="grid3">${inp('margem','Acréscimo (%)',{n:1})}${sel('arred','Arredondar',ARRED.map(a=>[a.id,a.nome]))}${inp('prazoDias','Prazo (dias úteis)',{n:1,ph:'opcional'})}</div>
+      ${inp('precoManual','Preço-alvo / fixo (R$)',{n:1,ph:'ex.: 49,90 — mostra se dá lucro'})}
+      <div class="lines" id="k-res"></div>
+    </div>
+    <label class="row" style="gap:8px"><input type="checkbox" data-f="publicado" style="width:auto" ${draft.publicado?'checked':''}> Publicar na área do vendedor</label>
+  </div>
+  <div class="dlg-f">${k?'<button class="btn danger left" type="button" id="del">Excluir</button>':''}<button class="btn" type="button" data-close>Cancelar</button><button class="btn pri" type="button" id="save">Salvar</button></div>`;
+  const pm=prodById();
+  const items=()=>{const r=kitCalc(draft,pm,cfg,fils);
+    $('#k-items').innerHTML=r.linhas.length?`<div class="irow head"><span>Produto</span><span>Qtd</span><span class="tt">Custo un.</span><span class="tt">Subtotal</span><span></span></div>`+r.linhas.map((l,i)=>`<div class="irow">
+      <span class="nm"><span>${esc(l.nome||'Produto removido')}</span><small>${l.falta?'não existe mais':`${nf(l.g/l.qtd||0,1)} g · ${esc(filNome(l.fil))}`}</small></span>
+      <input class="n" inputmode="decimal" data-iq="${i}" value="${esc(show(l.qtd))}" aria-label="Quantidade">
+      <span class="tt">${brl(l.unit||0)}</span><span class="tt">${brl(l.custo)}</span>
+      <button class="x" type="button" data-ir="${i}" aria-label="Remover">×</button></div>`).join(''):'<div class="empty">Nenhum produto ainda. Busque abaixo e clique para adicionar.</div>'};
+  const pickList=()=>{const q=$('#k-q').value.toLowerCase();
+    const l=prods.filter(p=>!q||(p.nome||'').toLowerCase().includes(q)||(p.categoria||'').toLowerCase().includes(q)).sort((a,b)=>(a.nome||'').localeCompare(b.nome||'')).slice(0,40);
+    $('#k-pick').innerHTML=l.length?l.map(p=>{const r=prodPrices(p,cfg,fils);return `<button type="button" data-add="${esc(p.id)}"><span>${esc(p.nome)} <small class="muted">${esc(p.categoria||'')}</small></span><span>custo ${brl(r.producao)}</span></button>`}).join(''):'<span class="hint" style="padding:6px">Nenhum produto encontrado.</span>'};
+  const res=()=>{const r=kitCalc(draft,pm,cfg,fils);
+    $('#k-marg').innerHTML=cfg.margens.map(m=>{const pr=roundPrice(r.custo*(1+Z(m)/100),draft.arred);return `<button type="button" class="mcard" data-mg="${Z(m)}" aria-pressed="${Z(m)===r.m&&!(P(draft.precoManual)>0)}"><span class="ml">+${nf(Z(m),0)}%</span><span class="mp">${brl(pr)}</span><span class="mu">lucro ${brl(pr-r.custo)}</span></button>`}).join('');
+    $$('#k-marg [data-mg]').forEach(b=>b.onclick=()=>{draft.margem=Z(b.dataset.mg);draft.precoManual='';form.querySelector('[data-f=margem]').value=show(draft.margem);form.querySelector('[data-f=precoManual]').value='';res()});
+    const fixo=P(draft.precoManual)>0;
+    $('#k-res').innerHTML=ln(`Peças <small>${nf(r.pecas,0)} itens · ${nf(r.gramas,0)} g · ${nf(r.horas,1)} h de impressão</small>`,brl(r.itens))
+      +ln('Embalagem e insumos',brl(Z(draft.emb)+Z(draft.ins)))+ln(`Montagem <small>${nf(Z(draft.minMontagem),0)} min</small>`,brl(r.mo))
+      +ln('Custo do kit',brl(r.custo),'total')
+      +ln(`<b>Preço do kit</b> <small>${fixo?'fixo':'+'+nf(r.m,0)+'% e arredondado'}</small>`,`<b>${brl(r.preco)}</b>`)
+      +ln('lucro',`${brl(r.lucro)} · ${nf(r.markupReal,0)}% sobre o custo · margem ${r.preco>0?nf(r.lucro/r.preco*100,0):'0'}%`,'sub')
+      +(r.avulsoSoma>0?ln('mesmas peças compradas avulsas',brl(r.avulsoSoma),'sub')+ln(r.economia>=0?'cliente economiza no kit':'kit sai mais caro que avulso',brl(Math.abs(r.economia)),'sub'):'')
+      +(fixo&&r.lucro<0?`<p class="chip">Esse preço fica abaixo do custo (${brl(r.custo)}).</p>`:'')
+      +(fixo&&r.lucro>=0&&r.markupReal<Z(cfg.margens[0])?`<p class="chip">Abaixo do seu menor acréscimo (+${nf(Z(cfg.margens[0]),0)}%).</p>`:'')};
+  const all=()=>{items();res()};
+  bindCommon(()=>res(),e=>{const t=e.target;if(t.dataset.iq!==undefined){draft.itens[+t.dataset.iq].qtd=Z(t.value);res();
+    const r=kitCalc(draft,pm,cfg,fils),row=t.closest('.irow');row.querySelectorAll('.tt')[1].textContent=brl(r.linhas[+t.dataset.iq].custo)}
+    if(t.id==='k-q')pickList()});
+  form.onclick=e=>{const a=e.target.closest('[data-add]'),r=e.target.closest('[data-ir]');
+    if(a){const ex=draft.itens.find(i=>i.produtoId===a.dataset.add);if(ex)ex.qtd=Z(ex.qtd)+1;else draft.itens.push({produtoId:a.dataset.add,qtd:1});all()}
+    if(r){draft.itens.splice(+r.dataset.ir,1);all()}};
+  $('#save').onclick=async()=>{if(!(draft.nome||'').trim()){toast('Dê um nome ao kit');return}if(!draft.itens.length){toast('Adicione pelo menos um produto');return}
+    draft.itens=draft.itens.filter(i=>Z(i.qtd)>0);
+    try{setStatus('Salvando…');await db.put('kits',draft.id,draft);await cleanupFoto();kits=await db.list('kits');const n=await publish();dlg.close();render();setStatus('Tudo salvo');toast(n?'Kit salvo e catálogo atualizado':'Kit salvo')}
+    catch(_){toast('Não foi possível salvar');setStatus('Erro ao salvar')}};
+  if(k)$('#del').onclick=e=>arm(e.target,'delk',async()=>{try{await db.del('kits',k.id);if(k.fotoId)await db.del('fotos',k.fotoId).catch(()=>{});kits=await db.list('kits');await publish();dlg.close();render();toast('Kit excluído')}catch(_){toast('Não foi possível excluir')}});
+  all();pickList();dlg.showModal();
+}
+$('#newProd').onclick=()=>openProd(null);
+$('#newKit').onclick=()=>{if(!prods.length){toast('Cadastre produtos antes de montar kits');return}openKit(null)};
+
+/* ---------- abas ---------- */
+function go(v){view=v==='kits'?'kits':'produtos';$('#v-produtos').hidden=view!=='produtos';$('#v-kits').hidden=view!=='kits';
+  $$('#tabs button').forEach(b=>b.setAttribute('aria-selected',b.dataset.v===view))}
+$('#tabs').addEventListener('click',e=>{const b=e.target.closest('button[data-v]');if(b)go(b.dataset.v)});
+
+C3.nav('catalogo').then(async w=>{if(w.role!=='admin')return;await load();
+  const m=/^#(p|k)=([A-Za-z0-9_-]+)/.exec(location.hash);if(m){if(m[1]==='k'){go('kits');openKit(m[2])}else openProd(m[2])}});
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<style>:root{color-scheme:light}body{margin:0;font:14px system-ui,sans-serif}[hidden]{display:none!important}</style>
+<title>Vendedores · Cotador 3D</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="/app.css">
+<script src="/core.js"></script>
+</head>
+<body>
+<header>
+  <div class="wrap bar">
+    <a class="brand" href="/"><i aria-hidden="true"></i>Cotador 3D</a>
+    <nav class="main" id="topnav" aria-label="Plataforma"></nav>
+    <div class="status" id="status" aria-live="polite">Carregando…</div>
+  </div>
+</header>
+
+<main class="wrap">
+  <div id="banner" class="banner" hidden></div>
+  <section class="sect">
+    <div><h1>Vendedores e loja</h1><p class="lead">Quem vende para você, quanto ganha e o que a área do vendedor mostra. O vendedor vê só os preços de venda do catálogo, nunca seus custos.</p></div>
+
+    <div class="panel">
+      <h2>Vendedores</h2>
+      <p class="hint">O e-mail precisa ser o mesmo que a pessoa usa para entrar (Cloudflare Access). Desconto máximo é o quanto ela pode tirar do total sem te consultar.</p>
+      <div class="tablewrap"><table>
+        <thead><tr><th>Nome</th><th>E-mail</th><th class="num">Comissão (%)</th><th class="num">Desconto máx. (%)</th><th>Ativo</th><th></th></tr></thead>
+        <tbody id="t-v"></tbody>
+      </table></div>
+      <div class="row"><button class="btn ghost" id="addV" type="button">+ Adicionar vendedor</button></div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-h"><h2>Comissões</h2><select id="mes" aria-label="Mês" style="width:auto"></select></div>
+      <p class="hint">Comissão sobre o total sem frete. “A pagar” conta só pedidos entregues e pagos por completo.</p>
+      <div class="tablewrap"><table>
+        <thead><tr><th>Vendedor</th><th class="num">Pedidos</th><th class="num">Vendido</th><th class="num">Comissão total</th><th class="num">A pagar</th></tr></thead>
+        <tbody id="t-c"></tbody>
+      </table></div>
+    </div>
+
+    <div class="panel">
+      <h2>Loja</h2>
+      <div class="grid3">
+        <label class="f">Nome da loja<input data-l="nome"></label>
+        <label class="f">Chave Pix<input data-l="pix" placeholder="e-mail, telefone ou chave aleatória"></label>
+        <label class="f">Sinal para confirmar (%)<input class="n" inputmode="decimal" data-l="sinalPct" placeholder="50"></label>
+      </div>
+      <label class="f">Rodapé das mensagens<input data-l="rodape" placeholder="Ex.: @minhaloja3d · entregas às terças e sextas"></label>
+      <h2 style="margin-top:6px">Embalagens para kits montados pelo vendedor</h2>
+      <p class="hint">Quando o vendedor monta um kit na hora, o preço é a soma das peças (preço “dentro de kit”) mais a embalagem escolhida aqui. Inclua no preço o material e o seu tempo de montar.</p>
+      <div class="tablewrap"><table>
+        <thead><tr><th>Embalagem</th><th class="num">Preço cobrado (R$)</th><th></th></tr></thead>
+        <tbody id="t-x"></tbody>
+      </table></div>
+      <div class="row"><button class="btn ghost" id="addX" type="button">+ Adicionar embalagem</button></div>
+    </div>
+
+    <div class="panel">
+      <h2>Acesso</h2>
+      <div id="acc"></div>
+    </div>
+  </section>
+</main>
+
+<script>
+(function(){
+const {$,brl,nf,P,Z,show,esc,db,pago,toast,setStatus,banner,arm}=C3;
+let vends=[],peds=[],loja={},acesso={admins:[]},who={};
+
+async function load(){
+  try{
+    const [v,o,l,a]=await Promise.all([db.list('vendedores'),db.list('pedidos'),db.get('loja','geral'),db.get('acesso','geral')]);
+    vends=v;peds=o;loja=l||{};acesso=a||{admins:[]};if(!Array.isArray(loja.kitExtras))loja.kitExtras=[];
+    setStatus('Tudo salvo');renderV();renderC();renderLoja();renderAcc();
+  }catch(_){banner('Não foi possível carregar os dados. Recarregue a página.');setStatus('Erro de conexão')}
+}
+
+/* ---------- vendedores ---------- */
+function renderV(){
+  $('#t-v').innerHTML=vends.length?vends.map(v=>`<tr>
+    <td><input class="w-m" data-vid="${esc(v.id)}" data-k="nome" value="${esc(v.nome||'')}" aria-label="Nome"></td>
+    <td><input class="w-l" type="email" data-vid="${esc(v.id)}" data-k="email" value="${esc(v.email||'')}" aria-label="E-mail"></td>
+    <td><input class="n w-s" inputmode="decimal" data-vid="${esc(v.id)}" data-k="comissao" value="${esc(show(Z(v.comissao)))}" aria-label="Comissão"></td>
+    <td><input class="n w-s" inputmode="decimal" data-vid="${esc(v.id)}" data-k="descMax" value="${esc(show(Z(v.descMax)))}" aria-label="Desconto máximo"></td>
+    <td><input type="checkbox" style="width:auto" data-vid="${esc(v.id)}" data-k="ativo" ${v.ativo!==false?'checked':''} aria-label="Ativo"></td>
+    <td><button class="x" type="button" data-rmv="${esc(v.id)}" aria-label="Remover">×</button></td></tr>`).join('')
+    :'<tr><td colspan="6" class="muted" style="padding:14px">Nenhum vendedor ainda.</td></tr>';
+}
+const vT={};
+$('#t-v').addEventListener('input',e=>{const t=e.target,v=vends.find(x=>x.id===t.dataset.vid);if(!v)return;const k=t.dataset.k;
+  v[k]=k==='ativo'?t.checked:(k==='comissao'||k==='descMax')?Z(t.value):k==='email'?t.value.trim().toLowerCase():t.value;
+  setStatus('Salvando…');clearTimeout(vT[v.id]);vT[v.id]=setTimeout(async()=>{try{await db.put('vendedores',v.id,v);setStatus('Tudo salvo');renderC();renderAcc()}catch(_){setStatus('Erro ao salvar')}},600)});
+$('#t-v').addEventListener('click',e=>{const b=e.target.closest('[data-rmv]');if(!b)return;
+  arm(b,'v'+b.dataset.rmv,async()=>{try{await db.del('vendedores',b.dataset.rmv);vends=vends.filter(v=>v.id!==b.dataset.rmv);renderV();renderC();renderAcc()}catch(_){toast('Não foi possível remover')}})});
+$('#addV').onclick=async()=>{const v={id:db.newId(),nome:'',email:'',comissao:10,descMax:5,ativo:true};
+  try{await db.put('vendedores',v.id,v);vends.push(v);renderV();document.querySelector(`[data-vid="${v.id}"][data-k=nome]`).focus()}catch(_){toast('Não foi possível adicionar')}};
+
+/* ---------- comissões ---------- */
+function renderC(){
+  const meses=[...new Set(peds.map(o=>(o.criadoEm||'').slice(0,7)).filter(Boolean))].sort().reverse();const cur=$('#mes').value||meses[0]||'';
+  $('#mes').innerHTML='<option value="*">Todos os meses</option>'+meses.map(m=>`<option value="${m}">${new Date(m+'-01T12:00:00').toLocaleDateString('pt-BR',{month:'long',year:'numeric'})}</option>`).join('');$('#mes').value=cur||'*';
+  const m=$('#mes').value;const l=peds.filter(o=>o.vendedor&&o.status!=='cancelado'&&(m==='*'||(o.criadoEm||'').startsWith(m)));
+  const by=new Map();l.forEach(o=>{const r=by.get(o.vendedor)||{nome:o.vendedorNome||o.vendedor,n:0,v:0,c:0,ap:0};const base=Z(o.total)-Z(o.frete),c=base*Z(o.comissaoPct)/100;
+    r.n++;r.v+=Z(o.total);r.c+=c;if(o.status==='entregue'&&pago(o)>=Z(o.total)-0.009)r.ap+=c;by.set(o.vendedor,r)});
+  $('#t-c').innerHTML=by.size?[...by.values()].map(r=>`<tr><td>${esc(r.nome)}</td><td class="num">${r.n}</td><td class="num">${brl(r.v)}</td><td class="num">${brl(r.c)}</td><td class="num"><b>${brl(r.ap)}</b></td></tr>`).join('')
+    :'<tr><td colspan="5" class="muted" style="padding:14px">Nenhuma venda de vendedor neste período.</td></tr>';
+}
+$('#mes').addEventListener('input',renderC);
+
+/* ---------- loja ---------- */
+function renderLoja(){
+  document.querySelectorAll('[data-l]').forEach(i=>{const k=i.dataset.l;i.value=k==='sinalPct'?show(loja[k]):loja[k]||''});
+  $('#t-x').innerHTML=loja.kitExtras.length?loja.kitExtras.map((x,i)=>`<tr><td><input class="w-l" data-xi="${i}" data-xk="nome" value="${esc(x.nome||'')}" aria-label="Embalagem"></td>
+    <td><input class="n w-s" inputmode="decimal" data-xi="${i}" data-xk="preco" value="${esc(show(Z(x.preco)))}" aria-label="Preço"></td><td><button class="x" type="button" data-rmx="${i}" aria-label="Remover">×</button></td></tr>`).join('')
+    :'<tr><td colspan="3" class="muted" style="padding:14px">Nenhuma embalagem. Ex.: “Caixa kraft + laço” por R$ 8.</td></tr>';
+}
+let lT=null;
+function saveLoja(){setStatus('Salvando…');clearTimeout(lT);lT=setTimeout(async()=>{try{await db.put('loja','geral',loja);setStatus('Tudo salvo')}catch(_){setStatus('Erro ao salvar')}},600)}
+document.querySelectorAll('[data-l]').forEach(i=>i.addEventListener('input',()=>{const k=i.dataset.l;loja[k]=k==='sinalPct'?Z(i.value):i.value;saveLoja()}));
+$('#t-x').addEventListener('input',e=>{const t=e.target;if(t.dataset.xi===undefined)return;const x=loja.kitExtras[+t.dataset.xi];x[t.dataset.xk]=t.dataset.xk==='preco'?Z(t.value):t.value;saveLoja()});
+$('#t-x').addEventListener('click',e=>{const b=e.target.closest('[data-rmx]');if(!b)return;loja.kitExtras.splice(+b.dataset.rmx,1);renderLoja();saveLoja()});
+$('#addX').onclick=()=>{loja.kitExtras.push({id:C3.uid(),nome:'',preco:0});renderLoja();saveLoja();document.querySelector(`[data-xi="${loja.kitExtras.length-1}"]`).focus()};
+
+/* ---------- acesso ---------- */
+function renderAcc(){
+  const admins=acesso.admins||[],em=who.email;
+  const sellerEmails=vends.filter(v=>v.ativo!==false&&v.email).map(v=>v.email);
+  let h='';
+  if(!em)h+=`<p class="banner">Não identifiquei seu e-mail: o endereço ainda não está protegido pelo Cloudflare Access. Sem isso, qualquer pessoa com o link entra como administrador. Veja o README, “Proteger com login”.</p>`;
+  else h+=`<p class="hint">Você entrou como <b>${esc(em)}</b>.</p>`;
+  if(!admins.length){
+    h+=`<p class="hint"><b>Modo aberto:</b> quem passa pelo login e não é vendedor entra como administrador. Cadastre seu e-mail abaixo para que só os administradores listados vejam custos e pedidos de todos.</p>`;
+  }else{
+    h+=`<p class="hint"><b>Modo restrito:</b> só estes e-mails são administradores; vendedores veem só a área deles; o resto fica sem acesso.${who.verificado?' A assinatura do login é conferida em cada acesso.':''}</p>`;
+  }
+  h+=`<div class="items">${admins.map((a,i)=>`<div class="ln"><span>${esc(a)}${a===em?' <span class="badge acc">você</span>':''}</span><span><button class="x" type="button" data-rma="${i}" aria-label="Remover administrador">×</button></span></div>`).join('')}</div>
+  <div class="row"><input type="email" id="newAdm" placeholder="e-mail do administrador" style="max-width:320px">
+  <button class="btn" type="button" id="addAdm">Adicionar administrador</button>${em&&!admins.includes(em)?`<button class="btn pri" type="button" id="addMe">Adicionar meu e-mail</button>`:''}</div>
+  <p class="hint">No Cloudflare Access, inclua na política os e-mails dos administradores <b>e</b> dos vendedores${sellerEmails.length?` (${sellerEmails.map(esc).join(', ')})`:''}. Cadastre o vendedor aqui <b>antes</b> de liberar o e-mail dele no Access.</p>`;
+  $('#acc').innerHTML=h;
+}
+async function saveAcc(list){
+  try{const r=await C3.req('PUT','/api/acesso/geral',{admins:list});acesso={admins:list,team:r.team};toast(list.length?'Administradores salvos':'Modo aberto ativado');renderAcc()}
+  catch(e){toast(e.message==='inclua_seu_email'?'Inclua o seu próprio e-mail na lista, senão você perde o acesso':'Não foi possível salvar')}
+}
+$('#acc').addEventListener('click',e=>{const b=e.target.closest('button');if(!b)return;const list=[...(acesso.admins||[])];
+  if(b.id==='addMe'){list.push(who.email);saveAcc(list)}
+  else if(b.id==='addAdm'){const v=$('#newAdm').value.trim().toLowerCase();if(!/^\S+@\S+\.\S+$/.test(v)){toast('E-mail inválido');return}if(!list.includes(v))list.push(v);saveAcc(list)}
+  else if(b.dataset.rma!==undefined){const rm=list[+b.dataset.rma];arm(b,'a'+rm,()=>{list.splice(+b.dataset.rma,1);saveAcc(list)})}});
+
+C3.nav('vendedores').then(w=>{who=w;if(w.role==='admin')load()});
+})();
+</script>
+</body>
+</html>

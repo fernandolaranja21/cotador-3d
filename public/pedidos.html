@@ -1,0 +1,318 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<style>:root{color-scheme:light}body{margin:0;font:14px system-ui,sans-serif}[hidden]{display:none!important}</style>
+<title>Pedidos · Cotador 3D</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="/app.css">
+<script src="/core.js"></script>
+</head>
+<body>
+<header>
+  <div class="wrap bar">
+    <a class="brand" href="/"><i aria-hidden="true"></i>Cotador 3D</a>
+    <nav class="main" id="topnav" aria-label="Plataforma"></nav>
+    <div class="status" id="status" aria-live="polite">Carregando…</div>
+  </div>
+  <nav class="wrap subbar" id="tabs" role="tablist" aria-label="Pedidos">
+    <button role="tab" data-v="quadro" aria-selected="true">Linha de produção</button>
+    <button role="tab" data-v="producao" aria-selected="false">O que imprimir</button>
+    <button role="tab" data-v="lista" aria-selected="false">Todos os pedidos</button>
+  </nav>
+</header>
+
+<main class="wrap">
+  <div id="banner" class="banner" hidden></div>
+
+  <section id="v-quadro" class="sect">
+    <div class="toolbar">
+      <input type="search" id="q" placeholder="Buscar cliente, número ou item" aria-label="Buscar pedido">
+      <select id="fv" aria-label="Vendedor"></select>
+      <span class="grow"></span>
+      <button class="btn pri" id="newPed" type="button">+ Novo pedido</button>
+    </div>
+    <div class="stat" id="kpis"></div>
+    <div class="kanban" id="board"></div>
+  </section>
+
+  <section id="v-producao" class="sect" hidden>
+    <div><h1>O que imprimir</h1><p class="lead">Soma das peças dos pedidos confirmados que ainda não foram feitas. Kits aparecem separados nas peças que os compõem, agrupadas por filamento para você trocar menos de rolo.</p></div>
+    <div class="stat" id="pkpis"></div>
+    <div class="panel"><div class="grid3">
+      <label class="f">Horas de impressão por dia, por impressora<input class="n" inputmode="decimal" id="horasDia"></label>
+      <label class="f">Impressoras em uso<input class="n" inputmode="decimal" id="nImp"></label>
+      <span></span></div></div>
+    <div id="prodList" class="sect"></div>
+  </section>
+
+  <section id="v-lista" class="sect" hidden>
+    <div class="toolbar">
+      <select id="fm" aria-label="Mês"></select>
+      <select id="fs" aria-label="Etapa"></select>
+    </div>
+    <div class="stat" id="lkpis"></div>
+    <div class="tablewrap"><table>
+      <thead><tr><th>Nº</th><th>Data</th><th>Cliente</th><th>Vendedor</th><th>Itens</th><th>Etapa</th><th>Pagamento</th><th class="num">Total</th><th class="num">A receber</th></tr></thead>
+      <tbody id="t-list"></tbody>
+    </table></div>
+  </section>
+</main>
+
+<dialog id="dlg"><form class="dlg" id="dlgForm" novalidate></form></dialog>
+
+<script>
+(function(){
+const {$,$$,brl,nf,P,Z,show,esc,db,withDef,prodCost,filNome,ETAPAS,etapaNome,CANAIS,FORMAS,pago,pagStatus,explode,priceItems,totals,itemResumo,numero,toast,setStatus,banner,arm,copyText}=C3;
+let cfg=withDef(),fils=[],prods=[],peds=[],cat=[],vends=[],loja={},meEmail='';
+let view='quadro';
+
+async function load(){
+  try{
+    const [c,f,p,o,ct,v,l]=await Promise.all([db.get('config','geral'),db.list('filamentos'),db.list('produtos'),db.list('pedidos'),db.list('catalogo'),db.list('vendedores'),db.get('loja','geral')]);
+    cfg=withDef(c);fils=f;prods=p;peds=o;cat=ct;vends=v;loja=l||{};setStatus('Tudo salvo');banner('');render();
+  }catch(e){banner('Não foi possível carregar os pedidos. Recarregue a página.');setStatus('Erro de conexão')}
+}
+async function reload(){peds=await db.list('pedidos');render()}
+document.addEventListener('visibilitychange',()=>{if(!document.hidden&&!dlg.open)reload().catch(()=>{})});
+
+/* ---------- utilidades ---------- */
+const hoje=()=>{const d=new Date();d.setHours(0,0,0,0);return d};
+function prazoBadge(o){if(!o.prazo||o.status==='entregue'||o.status==='cancelado')return '';
+  const d=new Date(o.prazo+'T00:00:00'),dias=Math.round((d-hoje())/864e5);
+  const t=dias<0?`atrasado ${-dias}d`:dias===0?'entrega hoje':`entrega em ${dias}d`;
+  return `<span class="badge ${dias<0?'warn':dias<=2?'acc':''}">${t} · ${d.toLocaleDateString('pt-BR',{day:'2-digit',month:'2-digit'})}</span>`}
+function progresso(o){const ps=explode(o);const tot=ps.reduce((a,p)=>a+p.qtd,0);const f=ps.reduce((a,p)=>a+Math.min(p.qtd,Z((o.feito||{})[p.key])),0);return {tot,f,pct:tot?f/tot*100:0}}
+const ativo=o=>o.status!=='cancelado';
+const vendNome=o=>o.vendedorNome||(o.vendedor?o.vendedor:'Você');
+
+/* ---------- quadro ---------- */
+function filtered(){const q=$('#q').value.trim().toLowerCase(),fv=$('#fv').value;
+  return peds.filter(o=>(!q||[numero(o),o.cliente,o.contato,itemResumo(o)].join(' ').toLowerCase().includes(q))&&(!fv||(fv==='_eu'?!o.vendedor:o.vendedor===fv)))}
+function render(){
+  const vs=[...new Set(peds.map(o=>o.vendedor).filter(Boolean))];const fv=$('#fv').value;
+  $('#fv').innerHTML=`<option value="">Todos os vendedores</option><option value="_eu">Vendas diretas</option>`+vs.map(v=>`<option value="${esc(v)}">${esc(peds.find(o=>o.vendedor===v)?.vendedorNome||v)}</option>`).join('');$('#fv').value=fv;
+  const list=filtered();
+  const abertos=peds.filter(o=>ativo(o)&&o.status!=='entregue');
+  const receber=peds.filter(ativo).reduce((a,o)=>a+Math.max(0,Z(o.total)-pago(o)),0);
+  const atras=abertos.filter(o=>o.prazo&&new Date(o.prazo+'T00:00:00')<hoje()).length;
+  $('#kpis').innerHTML=`<div><small>Em aberto</small><b>${abertos.length}</b></div><div><small>Aguardando pagamento</small><b>${peds.filter(o=>o.status==='novo').length}</b></div>
+    <div><small>A receber</small><b>${brl(receber)}</b></div><div><small>Atrasados</small><b>${atras}</b></div>`;
+  $('#board').innerHTML=ETAPAS.map((e,ei)=>{
+    let cs=list.filter(o=>(o.status||'novo')===e.id);
+    if(e.id==='entregue')cs=cs.sort((a,b)=>(b.atualizadoEm||b.criadoEm||'').localeCompare(a.atualizadoEm||a.criadoEm||'')).slice(0,12);
+    else cs.sort((a,b)=>(a.prazo||'9999').localeCompare(b.prazo||'9999'));
+    return `<div class="kcol"><div class="kcol-h"><span>${esc(e.nome)}</span><span>${cs.length}</span></div>
+    ${cs.map(o=>{const pg=pagStatus(o),pr=progresso(o);
+      return `<div class="pcard2" role="button" tabindex="0" data-o="${esc(o.id)}">
+        <div class="top"><b>${esc(o.cliente||'Sem nome')}</b><span class="no">${numero(o)}</span></div>
+        <span class="it">${esc(itemResumo(o))}</span>
+        <div class="top"><span class="muted" style="font-size:12px">${esc(o.canal||'')}${o.vendedor?' · '+esc(vendNome(o)):''}</span><b style="font-family:var(--f-mono)">${brl(Z(o.total))}</b></div>
+        <div class="tags"><span class="badge ${pg.cls}">${esc(pg.nome)}</span>${prazoBadge(o)}</div>
+        ${['fila','imprimindo','acabamento'].includes(o.status)&&pr.tot?`<div class="bar-prog" title="${pr.f} de ${pr.tot} peças"><i style="width:${pr.pct}%"></i></div><span class="muted" style="font-size:11.5px">${pr.f}/${pr.tot} peças feitas</span>`:''}
+        <div class="row" style="justify-content:space-between">${ei>0?`<button class="btn" type="button" data-mv="-1" data-id="${esc(o.id)}" aria-label="Voltar etapa">←</button>`:'<span></span>'}${ei<ETAPAS.length-1?`<button class="btn" type="button" data-mv="1" data-id="${esc(o.id)}">${esc(ETAPAS[ei+1].nome.split(' · ')[0])} →</button>`:''}</div>
+      </div>`}).join('')||'<div class="hint" style="padding:4px">Nada aqui.</div>'}</div>`}).join('');
+  if(view==='producao')renderProd();if(view==='lista')renderList();
+}
+async function move(o,dir){
+  const i=ETAPAS.findIndex(e=>e.id===(o.status||'novo')),n=ETAPAS[i+dir];if(!n)return;
+  if(o.status==='novo'&&dir>0&&pagStatus(o).id==='pendente'&&!confirm(`O pedido ${numero(o)} não tem pagamento registrado. Confirmar e mandar para a fila mesmo assim?`))return;
+  await setStatusPed(o,n.id);
+}
+async function setStatusPed(o,st){
+  const now=new Date().toISOString();const d={...o,status:st,atualizadoEm:now,historico:[...(o.historico||[]),{em:now,status:st,por:meEmail||''}]};
+  try{await db.put('pedidos',o.id,d);await reload();toast(`${numero(o)} → ${etapaNome(st)}`)}catch(_){toast('Não foi possível mover o pedido')}
+}
+$('#board').addEventListener('click',e=>{const m=e.target.closest('[data-mv]');
+  if(m){e.stopPropagation();const o=peds.find(x=>x.id===m.dataset.id);if(o)move(o,+m.dataset.mv);return}
+  const c=e.target.closest('[data-o]');if(c)openPed(c.dataset.o)});
+document.addEventListener('keydown',e=>{if(e.key!=='Enter')return;const c=e.target.closest&&e.target.closest('.pcard2[data-o]');if(c&&e.target===c)openPed(c.dataset.o)});
+['#q','#fv'].forEach(s=>$(s).addEventListener('input',render));
+
+/* ---------- o que imprimir ---------- */
+function renderProd(){
+  $('#horasDia').value=show(cfg.horasDia);$('#nImp').value=show(Z(cfg.nImp)||cfg.impressoras.length||1);
+  const pm=new Map(prods.map(p=>[p.id,p]));const agg=new Map();
+  peds.filter(o=>['fila','imprimindo','acabamento'].includes(o.status)).forEach(o=>explode(o).forEach(x=>{
+    const rest=Math.max(0,x.qtd-Z((o.feito||{})[x.key]));const k=x.produtoId||('av:'+o.id+':'+x.key);
+    const cur=agg.get(k)||{k,produtoId:x.produtoId,nome:x.nome,qtd:0,feito:0,pedidos:[],o:x.produtoId?null:o};
+    cur.qtd+=x.qtd;cur.feito+=x.qtd-rest;if(rest)cur.pedidos.push(numero(o));agg.set(k,cur)}));
+  const rows=[...agg.values()].map(r=>{const rest=r.qtd-r.feito;const p=r.produtoId?pm.get(r.produtoId):null;
+    if(p){const c=prodCost(p,cfg,fils),q=Math.max(1,Z(p.q)||1),mesas=Math.ceil(rest/q);
+      return {...r,rest,mesas,q,horas:mesas*Z(p.h),gramas:mesas*Z(p.g),fil:c.fil,filKey:c.fil?c.fil.id:'_'}}
+    const it=(r.o?.itens||[]).find((_,i)=>'item'+i===r.k.split(':').pop());const frac=r.qtd?rest/r.qtd:0;
+    return {...r,rest,mesas:null,horas:Z(it?.horas)*frac,gramas:Z(it?.gramas)*frac,fil:null,filKey:'_av'}}).filter(r=>r.rest>0);
+  const H=rows.reduce((a,r)=>a+r.horas,0),G=rows.reduce((a,r)=>a+r.gramas,0),pecas=rows.reduce((a,r)=>a+r.rest,0);
+  const cap=Math.max(1,Z(cfg.horasDia))*Math.max(1,Z(cfg.nImp)||cfg.impressoras.length||1);
+  $('#pkpis').innerHTML=`<div><small>Peças a fazer</small><b>${nf(pecas,0)}</b></div><div><small>Impressão restante</small><b>${nf(H,1)} h</b></div>
+    <div><small>Filamento</small><b>${nf(G/1000,2)} kg</b></div><div><small>Dias de impressora</small><b>≈ ${nf(Math.ceil(H/cap*10)/10,1)}</b></div>`;
+  if(!rows.length){$('#prodList').innerHTML='<div class="empty">Nada para imprimir. Pedidos aparecem aqui quando estão em “Confirmado”, “Imprimindo” ou “Acabamento”.</div>';return}
+  const grp=new Map();rows.forEach(r=>{const g=grp.get(r.filKey)||{fil:r.fil,key:r.filKey,rows:[]};g.rows.push(r);grp.set(r.filKey,g)});
+  $('#prodList').innerHTML=[...grp.values()].map(g=>{const gG=g.rows.reduce((a,r)=>a+r.gramas,0),gH=g.rows.reduce((a,r)=>a+r.horas,0);
+    const title=g.key==='_av'?'Encomendas avulsas (do cotador)':g.key==='_'?'Filamento padrão':filNome(g.fil);
+    return `<div class="panel"><div class="panel-h"><h2>${esc(title)}</h2><span class="muted">${nf(gG,0)} g · ${nf(gH,1)} h</span></div>
+    <div class="tablewrap"><table><thead><tr><th>Peça</th><th class="num">Falta</th><th class="num">Feitas</th><th class="num">Mesas</th><th class="num">Horas</th><th class="num">Gramas</th><th>Pedidos</th></tr></thead><tbody>
+    ${g.rows.sort((a,b)=>b.horas-a.horas).map(r=>`<tr><td>${esc(r.nome)}</td><td class="num"><b>${nf(r.rest,0)}</b></td><td class="num">${nf(r.feito,0)}/${nf(r.qtd,0)}</td>
+      <td class="num">${r.mesas===null?'—':`${nf(r.mesas,0)} <small class="muted">(${nf(r.q,0)}/mesa)</small>`}</td><td class="num">${nf(r.horas,1)}</td><td class="num">${nf(r.gramas,0)}</td><td class="muted">${esc(r.pedidos.join(', '))}</td></tr>`).join('')}
+    </tbody></table></div></div>`}).join('')+'<p class="hint">Para marcar peças como feitas, abra o pedido no quadro e use os contadores em “Produção”.</p>';
+}
+let cfgT=null;
+['#horasDia','#nImp'].forEach(s=>$(s).addEventListener('input',e=>{cfg[e.target.id]=Z(e.target.value);clearTimeout(cfgT);
+  cfgT=setTimeout(async()=>{try{const cur=withDef(await db.get('config','geral'));cur.horasDia=cfg.horasDia;cur.nImp=cfg.nImp;await db.put('config','geral',cur);setStatus('Tudo salvo')}catch(_){setStatus('Erro ao salvar')}
+    renderProdKeep()},600)}));
+function renderProdKeep(){const a=document.activeElement?.id;renderProd();if(a){const el=document.getElementById(a);if(el){el.focus();const v=el.value;el.setSelectionRange?.(v.length,v.length)}}}
+
+/* ---------- lista ---------- */
+function renderList(){
+  const meses=[...new Set(peds.map(o=>(o.criadoEm||'').slice(0,7)).filter(Boolean))].sort().reverse();
+  const fm=$('#fm').value,fs=$('#fs').value;
+  $('#fm').innerHTML='<option value="">Todos os meses</option>'+meses.map(m=>`<option value="${m}">${new Date(m+'-01T12:00:00').toLocaleDateString('pt-BR',{month:'long',year:'numeric'})}</option>`).join('');$('#fm').value=meses.includes(fm)?fm:'';
+  $('#fs').innerHTML='<option value="">Todas as etapas</option>'+[...ETAPAS,{id:'cancelado',nome:'Cancelado'}].map(e=>`<option value="${e.id}">${esc(e.nome)}</option>`).join('');$('#fs').value=fs;
+  const l=peds.filter(o=>(!$('#fm').value||(o.criadoEm||'').startsWith($('#fm').value))&&(!fs||(o.status||'novo')===fs)).sort((a,b)=>Z(b.numero)-Z(a.numero));
+  const v=l.filter(ativo);
+  $('#lkpis').innerHTML=`<div><small>Pedidos</small><b>${v.length}</b></div><div><small>Vendido</small><b>${brl(v.reduce((a,o)=>a+Z(o.total),0))}</b></div>
+    <div><small>Recebido</small><b>${brl(v.reduce((a,o)=>a+pago(o),0))}</b></div><div><small>Ticket médio</small><b>${brl(v.length?v.reduce((a,o)=>a+Z(o.total),0)/v.length:0)}</b></div>`;
+  $('#t-list').innerHTML=l.length?l.map(o=>{const pg=pagStatus(o);return `<tr style="cursor:pointer" data-o="${esc(o.id)}"><td class="num">${numero(o)}</td><td class="num muted">${o.criadoEm?new Date(o.criadoEm).toLocaleDateString('pt-BR'):''}</td>
+    <td>${esc(o.cliente)}</td><td class="muted">${esc(vendNome(o))}</td><td class="muted" style="max-width:280px">${esc(itemResumo(o))}</td><td>${esc(etapaNome(o.status||'novo'))}</td>
+    <td><span class="badge ${pg.cls}">${esc(pg.nome)}</span></td><td class="num">${brl(Z(o.total))}</td><td class="num">${ativo(o)?brl(Math.max(0,Z(o.total)-pago(o))):'—'}</td></tr>`}).join('')
+    :'<tr><td colspan="9" class="muted" style="padding:14px">Nenhum pedido.</td></tr>';
+}
+['#fm','#fs'].forEach(s=>$(s).addEventListener('input',renderList));
+$('#t-list').addEventListener('click',e=>{const r=e.target.closest('[data-o]');if(r)openPed(r.dataset.o)});
+
+/* ---------- pedido ---------- */
+const dlg=$('#dlg'),form=$('#dlgForm');
+form.addEventListener('submit',e=>e.preventDefault());
+dlg.addEventListener('close',()=>{if(location.hash)history.replaceState(null,'',location.pathname)});
+let d=null;
+function blankPed(){const now=new Date().toISOString();return {id:db.newId(),status:'novo',criadoEm:now,cliente:'',contato:'',canal:'WhatsApp',prazo:'',obs:'',vendedor:'',vendedorNome:'',comissaoPct:0,itens:[],descontoPct:0,frete:0,pagamentos:[],feito:{},historico:[{em:now,status:'novo'}]}}
+function openPed(id){
+  const o=id?peds.find(x=>x.id===id):null;if(id&&!o)return;
+  d=o?C3.clone(o):blankPed();if(!d.feito)d.feito={};if(!d.pagamentos)d.pagamentos=[];
+  const vopts=[['', 'Venda direta (você)'],...vends.map(v=>[v.email,v.nome||v.email])];
+  if(d.vendedor&&!vopts.some(v=>v[0]===d.vendedor))vopts.push([d.vendedor,d.vendedorNome||d.vendedor]);
+  form.innerHTML=`<div class="dlg-h"><h2>${o?`Pedido ${numero(o)}`:'Novo pedido'}</h2><button class="x" type="button" data-close aria-label="Fechar">×</button></div>
+  <div class="dlg-b">
+    <div class="grid2">
+      <label class="f">Cliente<input data-f="cliente" value="${esc(d.cliente)}"></label>
+      <label class="f">Contato (WhatsApp, @Instagram)<input data-f="contato" value="${esc(d.contato)}"></label>
+    </div>
+    <div class="grid4">
+      <label class="f">Canal<select data-f="canal">${CANAIS.map(c=>`<option${c===d.canal?' selected':''}>${c}</option>`).join('')}</select></label>
+      <label class="f">Prazo de entrega<input type="date" data-f="prazo" value="${esc(d.prazo)}"></label>
+      <label class="f">Vendedor<select data-f="vendedor">${vopts.map(([v,t])=>`<option value="${esc(v)}"${v===(d.vendedor||'')?' selected':''}>${esc(t)}</option>`).join('')}</select></label>
+      <label class="f">Etapa<select data-f="status">${[...ETAPAS,{id:'cancelado',nome:'Cancelado'}].map(e=>`<option value="${e.id}"${e.id===(d.status||'novo')?' selected':''}>${esc(e.nome)}</option>`).join('')}</select></label>
+    </div>
+    <div class="panel" style="padding:12px"><div class="panel-h"><h2>Itens</h2></div>
+      <div class="items" id="p-items"></div>
+      <input type="search" id="p-q" placeholder="Adicionar do catálogo: buscar produto ou kit" aria-label="Buscar no catálogo">
+      <div class="pick" id="p-pick"></div>
+      <div class="row"><button class="btn ghost" type="button" id="addAv">+ Item avulso (sob encomenda)</button></div>
+      <div class="grid3">
+        <label class="f">Desconto (%)<input class="n" inputmode="decimal" data-f="descontoPct" value="${esc(show(Z(d.descontoPct)))}"></label>
+        <label class="f">Frete / entrega (R$)<input class="n" inputmode="decimal" data-f="frete" value="${esc(show(Z(d.frete)))}"></label>
+        <label class="f">Comissão do vendedor (%)<input class="n" inputmode="decimal" data-f="comissaoPct" value="${esc(show(Z(d.comissaoPct)))}"></label>
+      </div>
+      <div class="lines" id="p-tot"></div>
+    </div>
+    <div class="panel" style="padding:12px"><div class="panel-h"><h2>Pagamento</h2><span id="p-pag"></span></div>
+      <div class="items" id="p-pays"></div>
+      <div class="grid4">
+        <label class="f">Valor (R$)<input class="n" inputmode="decimal" id="pv"></label>
+        <label class="f">Forma<select id="pf">${FORMAS.map(f=>`<option>${f}</option>`).join('')}</select></label>
+        <label class="f">Data<input type="date" id="pd" value="${new Date().toISOString().slice(0,10)}"></label>
+        <label class="f">&nbsp;<button class="btn" type="button" id="addPay">Registrar</button></label>
+      </div>
+      <div class="row"><button class="btn ghost" type="button" id="paySinal">Sinal de ${nf(Z(loja.sinalPct)||50,0)}%</button><button class="btn ghost" type="button" id="payRest">Restante</button></div>
+    </div>
+    <div class="panel" style="padding:12px"><div class="panel-h"><h2>Produção</h2><span class="muted" id="p-prog"></span></div>
+      <div class="items" id="p-feito"></div>
+    </div>
+    <label class="f">Observações (cores, nome personalizado, endereço…)<textarea data-f="obs" rows="2">${esc(d.obs||'')}</textarea></label>
+    ${o?`<details><summary class="hint">Histórico</summary><div class="lines">${(d.historico||[]).map(h=>`<div class="ln sub"><span>${esc(etapaNome(h.status))}${h.por?' · '+esc(h.por):''}</span><span>${new Date(h.em).toLocaleString('pt-BR')}</span></div>`).join('')}</div></details>`:''}
+  </div>
+  <div class="dlg-f">${o?'<button class="btn danger left" type="button" id="del">Excluir</button>':''}
+    <button class="btn" type="button" id="msg">Copiar mensagem p/ cliente</button>
+    <button class="btn" type="button" data-close>Cancelar</button><button class="btn pri" type="button" id="save">Salvar</button></div>`;
+  const catById=new Map(cat.map(c=>[c.id,c]));
+  const rItems=()=>{$('#p-items').innerHTML=d.itens.length?`<div class="irow head"><span>Item</span><span>Qtd</span><span>Preço un.</span><span class="tt">Total</span><span></span></div>`+d.itens.map((it,i)=>`<div class="irow">
+      <span class="nm">${it.tipo==='avulso'?`<input data-in="${i}" value="${esc(it.nome)}" aria-label="Nome do item">`:`<span>${esc(it.nome)}</span>`}<small>${it.tipo==='avulso'?`<label>peças <input class="n" style="width:70px;display:inline-block;padding:3px 6px" inputmode="decimal" data-ip="${i}" value="${esc(show(Z(it.pecas)||1))}"></label>`:(it.componentes||[]).length>1?esc(it.componentes.map(c=>`${nf(Z(c.qtd),0)}× ${c.nome}`).join(' + ')):esc(it.tipo==='kit'?'kit':'produto')}</small></span>
+      <input class="n" inputmode="decimal" data-iq="${i}" value="${esc(show(Z(it.qtd)))}" aria-label="Quantidade">
+      <input class="n" inputmode="decimal" data-iu="${i}" value="${esc(show(Z(it.precoUnit)))}" aria-label="Preço unitário">
+      <span class="tt" id="it-t-${i}">${brl(Z(it.qtd)*Z(it.precoUnit))}</span>
+      <button class="x" type="button" data-ir="${i}" aria-label="Remover">×</button></div>`).join(''):'<div class="empty">Sem itens ainda.</div>'};
+  const rTot=()=>{const t=totals(d);d.subtotal=t.subtotal;d.total=t.total;
+    $('#p-tot').innerHTML=`<div class="ln"><span>Subtotal</span><span>${brl(t.subtotal)}</span></div>${Z(d.descontoPct)?`<div class="ln sub"><span>desconto ${nf(Z(d.descontoPct),1)}%</span><span>− ${brl(t.subtotal*Z(d.descontoPct)/100)}</span></div>`:''}${Z(d.frete)?`<div class="ln sub"><span>frete</span><span>${brl(Z(d.frete))}</span></div>`:''}
+      <div class="ln total"><span>Total</span><span>${brl(t.total)}</span></div>${d.vendedor&&Z(d.comissaoPct)?`<div class="ln sub"><span>comissão do vendedor ${nf(Z(d.comissaoPct),1)}%</span><span>${brl((t.total-Z(d.frete))*Z(d.comissaoPct)/100)}</span></div>`:''}`;
+    d.itens.forEach((it,i)=>{const el=document.getElementById('it-t-'+i);if(el)el.textContent=brl(Z(it.qtd)*Z(it.precoUnit))});rPag()};
+  const rPag=()=>{const pg=pagStatus(d),rest=Math.max(0,Z(d.total)-pago(d));$('#p-pag').innerHTML=`<span class="badge ${pg.cls}">${esc(pg.nome)}</span> <span class="muted">falta ${brl(rest)}</span>`;
+    $('#p-pays').innerHTML=d.pagamentos.map((p,i)=>`<div class="ln"><span>${esc(p.data?new Date(p.data+'T12:00:00').toLocaleDateString('pt-BR'):'')} · ${esc(p.forma)}</span><span>${brl(Z(p.valor))} <button class="x" type="button" data-pr="${i}" aria-label="Remover pagamento">×</button></span></div>`).join('')||'<p class="hint">Nenhum pagamento registrado.</p>'};
+  const rFeito=()=>{const ps=explode(d);const pr=progresso(d);$('#p-prog').textContent=pr.tot?`${pr.f}/${pr.tot} peças`:'';
+    $('#p-feito').innerHTML=ps.length?ps.map(p=>{const f=Math.min(p.qtd,Z(d.feito[p.key]));return `<div class="ln"><span>${esc(p.nome)}</span><span class="counter"><button type="button" data-fd="${esc(p.key)}" data-d="-1" aria-label="Menos">−</button> ${f}/${nf(p.qtd,0)} <button type="button" data-fd="${esc(p.key)}" data-d="1" aria-label="Mais">+</button> <button class="btn" type="button" data-fall="${esc(p.key)}" data-n="${p.qtd}">Tudo</button></span></div>`}).join(''):'<p class="hint">As peças aparecem quando houver itens.</p>'};
+  const pickList=()=>{const q=$('#p-q').value.toLowerCase();
+    const l=cat.filter(c=>!q||(c.nome||'').toLowerCase().includes(q)||(c.categoria||'').toLowerCase().includes(q)).sort((a,b)=>(a.tipo+a.nome).localeCompare(b.tipo+b.nome)).slice(0,30);
+    $('#p-pick').innerHTML=l.length?l.map(c=>`<button type="button" data-add="${esc(c.id)}"><span>${c.tipo==='kit'?'<span class="badge acc">kit</span> ':''}${esc(c.nome)}</span><span>${brl(Z(c.preco))}</span></button>`).join(''):`<span class="hint" style="padding:6px">${cat.length?'Nada encontrado.':'Nenhum item publicado no catálogo ainda.'}</span>`};
+  const all=()=>{rItems();rTot();rFeito()};
+  form.oninput=e=>{const t=e.target;
+    if(t.dataset.f){d[t.dataset.f]=t.value;if(t.dataset.f==='vendedor'){const v=vends.find(x=>x.email===t.value);d.vendedorNome=v?(v.nome||v.email):'';if(v)d.comissaoPct=Z(v.comissao);if(!t.value)d.comissaoPct=0;form.querySelector('[data-f=comissaoPct]').value=show(Z(d.comissaoPct))}
+      if(['descontoPct','frete','comissaoPct','vendedor'].includes(t.dataset.f))rTot();return}
+    if(t.dataset.iq!==undefined){d.itens[+t.dataset.iq].qtd=Z(t.value);rTot();rFeito()}
+    else if(t.dataset.iu!==undefined){d.itens[+t.dataset.iu].precoUnit=Z(t.value);rTot()}
+    else if(t.dataset.in!==undefined){d.itens[+t.dataset.in].nome=t.value}
+    else if(t.dataset.ip!==undefined){d.itens[+t.dataset.ip].pecas=Z(t.value);rFeito()}
+    else if(t.id==='p-q')pickList()};
+  form.onclick=e=>{const b=e.target.closest('button');if(!b)return;
+    if(b.hasAttribute('data-close')){dlg.close();return}
+    if(b.dataset.add){const c=catById.get(b.dataset.add);const ex=d.itens.find(i=>i.refId===c.id&&i.tipo===c.tipo);
+      if(ex)ex.qtd=Z(ex.qtd)+1;else d.itens.push(...priceItems([{tipo:c.tipo,refId:c.id,qtd:1}],catById));all();return}
+    if(b.dataset.ir!==undefined){d.itens.splice(+b.dataset.ir,1);all();return}
+    if(b.id==='addAv'){d.itens.push({tipo:'avulso',nome:'Item sob encomenda',qtd:1,pecas:1,precoUnit:0});all();form.querySelector(`[data-in="${d.itens.length-1}"]`)?.select();return}
+    if(b.dataset.pr!==undefined){d.pagamentos.splice(+b.dataset.pr,1);rPag();return}
+    if(b.id==='addPay'){const v=P($('#pv').value);if(!(v>0)){toast('Informe o valor');return}d.pagamentos.push({valor:v,forma:$('#pf').value,data:$('#pd').value});$('#pv').value='';rPag();return}
+    if(b.id==='paySinal'){$('#pv').value=show(Math.round(Z(d.total)*(Z(loja.sinalPct)||50))/100);$('#pv').focus();return}
+    if(b.id==='payRest'){$('#pv').value=show(Math.max(0,Math.round((Z(d.total)-pago(d))*100)/100));$('#pv').focus();return}
+    if(b.dataset.fd){const k=b.dataset.fd,p=explode(d).find(x=>x.key===k);d.feito[k]=Math.max(0,Math.min(p?p.qtd:0,Z(d.feito[k])+ +b.dataset.d));rFeito();return}
+    if(b.dataset.fall){d.feito[b.dataset.fall]=+b.dataset.n;rFeito();return}
+    if(b.id==='msg'){copyText(mensagem(d));return}
+    if(b.id==='save'){save(o);return}
+    if(b.id==='del')arm(b,'del'+d.id,async()=>{try{await db.del('pedidos',d.id);dlg.close();await reload();toast('Pedido excluído')}catch(_){toast('Não foi possível excluir')}});
+  };
+  all();pickList();dlg.showModal();
+}
+async function save(o){
+  if(!d.itens.length){toast('Adicione pelo menos um item');return}
+  const now=new Date().toISOString();
+  if(!o||o.status!==d.status)d.historico=[...(d.historico||[]),...(o?[{em:now,status:d.status,por:meEmail||''}]:[])];
+  d.atualizadoEm=now;const t=totals(d);d.subtotal=t.subtotal;d.total=t.total;
+  try{setStatus('Salvando…');const r=await db.put('pedidos',d.id,d);dlg.close();await reload();setStatus('Tudo salvo');toast(o?'Pedido salvo':`Pedido #${String(r.numero||'').padStart(4,'0')} criado`)}
+  catch(_){toast('Não foi possível salvar');setStatus('Erro ao salvar')}
+}
+function mensagem(o){
+  const t=totals(o),rest=Math.max(0,t.total-pago(o)),sinal=Math.round(t.total*(Z(loja.sinalPct)||50))/100;
+  const linhas=(o.itens||[]).map(i=>`• ${nf(Z(i.qtd),0)}× ${i.nome} — ${brl(Z(i.qtd)*Z(i.precoUnit))}`).join('\n');
+  const cab=`Olá${o.cliente?', '+o.cliente.split(' ')[0]:''}! `;
+  const st=o.status||'novo';
+  let corpo;
+  if(st==='novo')corpo=`Segue o resumo do seu pedido ${numero(o)}:\n${linhas}\n${Z(o.descontoPct)?`Desconto: ${nf(Z(o.descontoPct),0)}%\n`:''}${Z(o.frete)?`Entrega: ${brl(Z(o.frete))}\n`:''}*Total: ${brl(t.total)}*\n\n`+
+    (loja.pix?`Para confirmar, o sinal é de ${brl(sinal)} (${nf(Z(loja.sinalPct)||50,0)}%) no Pix: ${loja.pix}\n`:'')+(o.prazo?`Prazo de entrega: ${new Date(o.prazo+'T12:00:00').toLocaleDateString('pt-BR')}\n`:'');
+  else if(st==='pronto')corpo=`Seu pedido ${numero(o)} está pronto! 🎉\n${rest>0?`Falta pagar ${brl(rest)}${loja.pix?` (Pix: ${loja.pix})`:''}.\n`:''}Me avise o melhor horário para a entrega/retirada.`;
+  else if(st==='entregue')corpo=`Obrigado pela compra! Se puder, mande uma foto das peças — e conte com a gente para os próximos presentes.`;
+  else corpo=`Pagamento recebido, obrigado! Seu pedido ${numero(o)} já está em produção (${etapaNome(st).toLowerCase()}).${o.prazo?`\nPrevisão: ${new Date(o.prazo+'T12:00:00').toLocaleDateString('pt-BR')}.`:''}${rest>0?`\nRestante na entrega: ${brl(rest)}.`:''}`;
+  return cab+corpo+(loja.rodape?`\n\n${loja.rodape}`:'');
+}
+$('#newPed').onclick=()=>openPed(null);
+
+/* ---------- abas ---------- */
+function go(v){view=['quadro','producao','lista'].includes(v)?v:'quadro';['quadro','producao','lista'].forEach(x=>$('#v-'+x).hidden=x!==view);
+  $$('#tabs button').forEach(b=>b.setAttribute('aria-selected',b.dataset.v===view));if(view==='producao')renderProd();if(view==='lista')renderList()}
+$('#tabs').addEventListener('click',e=>{const b=e.target.closest('button[data-v]');if(b)go(b.dataset.v)});
+
+C3.nav('pedidos').then(async w=>{if(w.role!=='admin')return;meEmail=w.email||'';await load();
+  const m=/^#o=([A-Za-z0-9_-]+)/.exec(location.hash);if(m)openPed(m[1])});
+})();
+</script>
+</body>
+</html>
