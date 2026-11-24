@@ -1,0 +1,244 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<style>:root{color-scheme:light}body{margin:0;font:14px system-ui,sans-serif}[hidden]{display:none!important}</style>
+<title>Área do vendedor</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="/app.css">
+<script src="/core.js"></script>
+</head>
+<body>
+<header>
+  <div class="wrap bar">
+    <span class="brand"><i aria-hidden="true"></i><span id="lojaNome">Área do vendedor</span></span>
+    <nav class="main" id="topnav" aria-label="Plataforma"></nav>
+    <div class="status" id="status" aria-live="polite">Carregando…</div>
+  </div>
+  <nav class="wrap subbar" id="tabs" role="tablist" aria-label="Área do vendedor">
+    <button role="tab" data-v="catalogo" aria-selected="true">Catálogo</button>
+    <button role="tab" data-v="montar" aria-selected="false">Montar kit</button>
+    <button role="tab" data-v="pedido" aria-selected="false">Pedido <span id="cartN" class="badge acc" hidden></span></button>
+    <button role="tab" data-v="meus" aria-selected="false">Meus pedidos</button>
+  </nav>
+</header>
+
+<main class="wrap">
+  <div id="banner" class="banner" hidden></div>
+
+  <section id="v-catalogo" class="sect">
+    <div class="toolbar">
+      <input type="search" id="q" placeholder="Buscar" aria-label="Buscar no catálogo">
+      <select id="fc" aria-label="Categoria"></select>
+      <select id="ft" aria-label="Tipo" style="max-width:180px"><option value="">Produtos e kits</option><option value="kit">Só kits</option><option value="produto">Só produtos</option></select>
+    </div>
+    <div class="cards" id="grid"></div>
+  </section>
+
+  <section id="v-montar" class="sect" hidden>
+    <div><h1>Montar kit</h1><p class="lead">Escolha as peças e a embalagem. O preço sai na hora, já com o valor de peça dentro de kit.</p></div>
+    <div class="calc">
+      <div class="col">
+        <div class="panel">
+          <input type="search" id="mq" placeholder="Buscar peça" aria-label="Buscar peça">
+          <div class="pick" id="mpick" style="max-height:420px"></div>
+        </div>
+      </div>
+      <div class="col cart">
+        <div class="panel">
+          <label class="f">Nome do kit<input id="mnome" placeholder="Kit personalizado"></label>
+          <div class="items" id="mitems"></div>
+          <label class="f">Embalagem<select id="mextra"></select></label>
+          <div class="lines" id="mres"></div>
+          <div class="row"><button class="btn pri" type="button" id="madd">Adicionar ao pedido</button><button class="btn" type="button" id="mcopy">Copiar oferta</button><button class="btn" type="button" id="mclear">Limpar</button></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="v-pedido" class="sect" hidden>
+    <div class="calc">
+      <div class="col">
+        <div class="panel">
+          <h2>Itens</h2>
+          <div class="items" id="citems"></div>
+        </div>
+        <div class="panel">
+          <h2>Cliente</h2>
+          <div class="grid2">
+            <label class="f">Nome<input data-c="cliente"></label>
+            <label class="f">Contato (WhatsApp, @Instagram)<input data-c="contato"></label>
+          </div>
+          <div class="grid2">
+            <label class="f">Canal<select data-c="canal"></select></label>
+            <label class="f">Entrega desejada<input type="date" data-c="prazo"></label>
+          </div>
+          <label class="f">Observações (cores, nomes, endereço…)<textarea data-c="obs" rows="2"></textarea></label>
+        </div>
+      </div>
+      <div class="col cart">
+        <div class="panel">
+          <h2>Resumo</h2>
+          <div class="grid2">
+            <label class="f" id="descLab">Desconto (%)<input class="n" inputmode="decimal" data-c="descontoPct"></label>
+            <label class="f">Frete / entrega (R$)<input class="n" inputmode="decimal" data-c="frete"></label>
+          </div>
+          <div class="lines" id="ctot"></div>
+          <div class="row"><button class="btn pri" type="button" id="send">Enviar pedido</button><button class="btn" type="button" id="ccopy">Copiar resumo para o cliente</button></div>
+          <p class="hint">Depois de enviado, o pedido entra na fila como “aguardando pagamento”. A confirmação do pagamento e a produção são feitas pelo responsável.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="v-meus" class="sect" hidden>
+    <div class="stat" id="mk"></div>
+    <div class="tablewrap"><table>
+      <thead><tr><th>Nº</th><th>Data</th><th>Cliente</th><th>Itens</th><th>Etapa</th><th>Pagamento</th><th class="num">Total</th><th class="num">Comissão</th><th></th></tr></thead>
+      <tbody id="t-meus"></tbody>
+    </table></div>
+  </section>
+</main>
+
+<script>
+(function(){
+const {$,$$,brl,nf,P,Z,show,esc,db,CANAIS,etapaNome,pagStatus,priceItems,totals,itemResumo,numero,fotoUrl,toast,setStatus,banner,arm,copyText}=C3;
+let cat=[],loja={kitExtras:[]},meus=[],who={},view='catalogo';
+const LS='c3-carrinho';
+const blankCart=()=>({itens:[],cliente:'',contato:'',canal:'WhatsApp',prazo:'',obs:'',descontoPct:0,frete:0});
+let cart=blankCart(),kit={nome:'',componentes:[],extraId:''};
+try{const s=JSON.parse(localStorage.getItem(LS)||'null');if(s&&Array.isArray(s.itens))cart={...blankCart(),...s}}catch(_){}
+const saveCart=()=>{try{localStorage.setItem(LS,JSON.stringify(cart))}catch(_){}};
+const catById=()=>new Map(cat.map(c=>[c.id,c]));
+const descMax=()=>who.role==='vendedor'?Z(who.vendedor?.descMax):100;
+const comissao=()=>who.role==='vendedor'?Z(who.vendedor?.comissao):0;
+
+async function load(){
+  try{
+    const [c,l,m]=await Promise.all([db.list('catalogo'),db.get('loja','geral'),db.list('pedidos')]);
+    cat=c;loja=l||{};if(!Array.isArray(loja.kitExtras))loja.kitExtras=[];
+    meus=who.role==='vendedor'?m:m.filter(o=>o.criadoPelaArea);
+    if(loja.nome)$('#lojaNome').textContent=loja.nome;
+    setStatus(who.role==='vendedor'?(who.vendedor?.nome||who.email):'Visão do vendedor');banner(who.role==='admin'?'Você está vendo como administrador: é exatamente o que o vendedor enxerga. Pedidos enviados daqui entram como venda direta.':'');
+    renderCat();renderMontar();renderCart();renderMeus();
+  }catch(_){banner('Não foi possível carregar o catálogo. Recarregue a página.');setStatus('Erro de conexão')}
+}
+
+/* ---------- catálogo ---------- */
+function oferta(c){
+  const it=c.tipo==='kit'&&(c.itens||[]).length?`\nInclui: ${c.itens.map(i=>`${nf(Z(i.qtd),0)}× ${i.nome}`).join(', ')}`:'';
+  const eco=c.tipo==='kit'&&Z(c.avulsoSoma)>Z(c.preco)+0.01?`\n(separado sairia ${brl(Z(c.avulsoSoma))} — economia de ${brl(Z(c.avulsoSoma)-Z(c.preco))})`:'';
+  return `*${c.nome}*${c.descricao?`\n${c.descricao}`:''}${it}\n💰 ${brl(Z(c.preco))}${eco}${c.prazoDias?`\n⏱ Prazo: ${nf(Z(c.prazoDias),0)} dias úteis`:''}${loja.rodape?`\n\n${loja.rodape}`:''}`;
+}
+function renderCat(){
+  const cats=[...new Set(cat.map(c=>c.categoria).filter(Boolean))].sort(),fc=$('#fc').value;
+  $('#fc').innerHTML='<option value="">Todas as categorias</option>'+cats.map(c=>`<option>${esc(c)}</option>`).join('');$('#fc').value=cats.includes(fc)?fc:'';
+  const q=$('#q').value.toLowerCase(),t=$('#ft').value;
+  const l=cat.filter(c=>(!q||[c.nome,c.descricao,c.categoria].join(' ').toLowerCase().includes(q))&&(!$('#fc').value||c.categoria===$('#fc').value)&&(!t||c.tipo===t))
+    .sort((a,b)=>(a.tipo===b.tipo?0:a.tipo==='kit'?-1:1)||(a.nome||'').localeCompare(b.nome||''));
+  $('#grid').innerHTML=l.length?l.map(c=>`<div class="card">
+    <div class="ph" style="${c.fotoId?`background-image:url('${fotoUrl(c.fotoId)}')`:''}">${c.fotoId?'':'sem foto'}</div>
+    <div class="bd"><div class="row" style="justify-content:space-between"><h3>${esc(c.nome)}</h3>${c.tipo==='kit'?'<span class="badge acc">kit</span>':''}</div>
+    ${c.descricao?`<p class="desc">${esc(c.descricao)}</p>`:''}
+    ${c.tipo==='kit'?`<span class="meta">${(c.itens||[]).map(i=>`${nf(Z(i.qtd),0)}× ${esc(i.nome)}`).join(' · ')}</span>`:''}
+    <span class="price">${brl(Z(c.preco))}</span>
+    <span class="meta">${c.tipo==='produto'?`dentro de kit ${brl(Z(c.precoKit))}`:Z(c.avulsoSoma)>Z(c.preco)+0.01?`economia de ${brl(Z(c.avulsoSoma)-Z(c.preco))} no kit`:''}${c.prazoDias?` · ${nf(Z(c.prazoDias),0)} dias úteis`:''}</span>
+    <div class="ft"><button class="btn pri" type="button" data-add="${esc(c.id)}">Adicionar</button><button class="btn" type="button" data-copy="${esc(c.id)}">Copiar oferta</button>${c.tipo==='produto'?`<button class="btn" type="button" data-kit="${esc(c.id)}">+ kit</button>`:''}</div></div></div>`).join('')
+    :`<div class="empty">${cat.length?'Nada encontrado.':'O catálogo ainda está vazio. Os itens aparecem aqui quando forem publicados.'}</div>`;
+}
+['#q','#fc','#ft'].forEach(s=>$(s).addEventListener('input',renderCat));
+$('#grid').addEventListener('click',e=>{const b=e.target.closest('button');if(!b)return;const c=catById().get(b.dataset.add||b.dataset.copy||b.dataset.kit);if(!c)return;
+  if(b.dataset.copy)copyText(oferta(c));
+  else if(b.dataset.add){const ex=cart.itens.find(i=>i.tipo===c.tipo&&i.refId===c.id);if(ex)ex.qtd=Z(ex.qtd)+1;else cart.itens.push({tipo:c.tipo,refId:c.id,qtd:1});saveCart();renderCart();toast(`${c.nome} no pedido`)}
+  else if(b.dataset.kit){addComp(c.id);toast(`${c.nome} no kit em montagem`)}});
+
+/* ---------- montar kit ---------- */
+function addComp(id){const ex=kit.componentes.find(x=>x.produtoId===id);if(ex)ex.qtd++;else kit.componentes.push({produtoId:id,qtd:1});renderMontar()}
+function kitItem(){return priceItems([{tipo:'montado',nome:kit.nome||'Kit personalizado',qtd:1,componentes:kit.componentes,extraId:kit.extraId}],catById(),loja.kitExtras)[0]||null}
+function renderMontar(){
+  const q=$('#mq').value.toLowerCase();const prods=cat.filter(c=>c.tipo==='produto'&&(!q||[c.nome,c.categoria].join(' ').toLowerCase().includes(q))).sort((a,b)=>(a.nome||'').localeCompare(b.nome||''));
+  $('#mpick').innerHTML=prods.length?prods.map(c=>`<button type="button" data-mp="${esc(c.id)}"><span>${esc(c.nome)} <small class="muted">${esc(c.categoria||'')}</small></span><span>${brl(Z(c.precoKit??c.preco))}</span></button>`).join(''):'<span class="hint" style="padding:6px">Nenhuma peça publicada.</span>';
+  const cm=catById();
+  $('#mitems').innerHTML=kit.componentes.length?kit.componentes.map((x,i)=>{const c=cm.get(x.produtoId);return `<div class="ln"><span>${esc(c?c.nome:'indisponível')} <small>${brl(Z(c?.precoKit??c?.preco))} cada</small></span>
+    <span class="counter"><button type="button" data-md="${i}" data-d="-1" aria-label="Menos">−</button> ${x.qtd} <button type="button" data-md="${i}" data-d="1" aria-label="Mais">+</button></span></div>`}).join(''):'<div class="empty">Clique nas peças ao lado para montar o kit.</div>';
+  const ev=$('#mextra').value||kit.extraId;
+  $('#mextra').innerHTML='<option value="">Sem embalagem</option>'+loja.kitExtras.map(x=>`<option value="${esc(x.id)}">${esc(x.nome)} — ${brl(Z(x.preco))}</option>`).join('');$('#mextra').value=ev||'';kit.extraId=$('#mextra').value;
+  const it=kitItem();
+  $('#mres').innerHTML=it?`<div class="ln"><span>${nf(it.componentes.reduce((a,c)=>a+c.qtd,0),0)} peças${it.extraNome?' + '+esc(it.extraNome):''}</span><span></span></div><div class="ln total"><span>Preço do kit</span><span>${brl(it.precoUnit)}</span></div>`
+    +(comissao()?`<div class="ln sub"><span>sua comissão</span><span>${brl(it.precoUnit*comissao()/100)}</span></div>`:''):'';
+}
+$('#mq').addEventListener('input',renderMontar);
+$('#mnome').addEventListener('input',e=>{kit.nome=e.target.value});
+$('#mextra').addEventListener('input',e=>{kit.extraId=e.target.value;renderMontar()});
+$('#mpick').addEventListener('click',e=>{const b=e.target.closest('[data-mp]');if(b)addComp(b.dataset.mp)});
+$('#mitems').addEventListener('click',e=>{const b=e.target.closest('[data-md]');if(!b)return;const x=kit.componentes[+b.dataset.md];x.qtd+=+b.dataset.d;if(x.qtd<=0)kit.componentes.splice(+b.dataset.md,1);renderMontar()});
+$('#madd').onclick=()=>{const it=kitItem();if(!it){toast('Escolha as peças do kit');return}
+  cart.itens.push({tipo:'montado',nome:kit.nome||'Kit personalizado',qtd:1,componentes:kit.componentes.map(x=>({...x})),extraId:kit.extraId});saveCart();renderCart();
+  kit={nome:'',componentes:[],extraId:kit.extraId};$('#mnome').value='';renderMontar();toast('Kit adicionado ao pedido')};
+$('#mcopy').onclick=()=>{const it=kitItem();if(!it){toast('Escolha as peças do kit');return}
+  copyText(`*${it.nome}*\nInclui: ${it.componentes.map(c=>`${nf(c.qtd,0)}× ${c.nome}`).join(', ')}${it.extraNome?`\nEmbalagem: ${it.extraNome}`:''}\n💰 ${brl(it.precoUnit)}${loja.rodape?`\n\n${loja.rodape}`:''}`)};
+$('#mclear').onclick=()=>{kit={nome:'',componentes:[],extraId:''};$('#mnome').value='';renderMontar()};
+
+/* ---------- pedido ---------- */
+function priced(){return {...cart,itens:priceItems(cart.itens,catById(),loja.kitExtras),descontoPct:Math.min(Z(cart.descontoPct),descMax())}}
+function renderCart(){
+  const p=priced();const n=cart.itens.reduce((a,i)=>a+Z(i.qtd),0);$('#cartN').hidden=!n;$('#cartN').textContent=n;
+  if(p.itens.length!==cart.itens.length){cart.itens=cart.itens.filter(i=>priceItems([i],catById(),loja.kitExtras).length);saveCart()}
+  $('#citems').innerHTML=p.itens.length?p.itens.map((it,i)=>`<div class="ln"><span>${esc(it.nome)}<br><small>${it.tipo!=='produto'?esc(it.componentes.map(c=>`${nf(c.qtd,0)}× ${c.nome}`).join(' + ')):''} ${brl(it.precoUnit)} cada</small></span>
+    <span class="counter"><button type="button" data-cd="${i}" data-d="-1" aria-label="Menos">−</button> ${nf(it.qtd,0)} <button type="button" data-cd="${i}" data-d="1" aria-label="Mais">+</button> <b style="min-width:90px;text-align:right">${brl(it.qtd*it.precoUnit)}</b></span></div>`).join('')
+    :'<div class="empty">Nenhum item. Adicione pelo Catálogo ou monte um kit.</div>';
+  $$('[data-c]').forEach(i=>{if(document.activeElement===i)return;const k=i.dataset.c;i.value=(k==='descontoPct'||k==='frete')?show(Z(cart[k])||''):cart[k]||''});
+  $('[data-c=canal]').innerHTML=CANAIS.map(c=>`<option${c===cart.canal?' selected':''}>${c}</option>`).join('');
+  $('#descLab').firstChild.textContent=`Desconto (%, até ${nf(descMax(),0)})`;
+  renderTot();
+}
+function renderTot(){const p=priced(),t=totals(p);
+  $('#ctot').innerHTML=`<div class="ln"><span>Subtotal</span><span>${brl(t.subtotal)}</span></div>${p.descontoPct?`<div class="ln sub"><span>desconto ${nf(p.descontoPct,1)}%</span><span>− ${brl(t.subtotal*p.descontoPct/100)}</span></div>`:''}${Z(p.frete)?`<div class="ln sub"><span>frete</span><span>${brl(Z(p.frete))}</span></div>`:''}
+    <div class="ln total"><span>Total</span><span>${brl(t.total)}</span></div>${comissao()?`<div class="ln sub"><span>sua comissão (${nf(comissao(),0)}%)</span><span>${brl((t.total-Z(p.frete))*comissao()/100)}</span></div>`:''}
+    ${Z(cart.descontoPct)>descMax()?`<p class="chip">Desconto limitado a ${nf(descMax(),0)}%.</p>`:''}`}
+$('#citems').addEventListener('click',e=>{const b=e.target.closest('[data-cd]');if(!b)return;const it=cart.itens[+b.dataset.cd];it.qtd=Z(it.qtd)+ +b.dataset.d;if(it.qtd<=0)cart.itens.splice(+b.dataset.cd,1);saveCart();renderCart()});
+$('#v-pedido').addEventListener('input',e=>{const t=e.target;if(!t.dataset.c)return;const k=t.dataset.c;cart[k]=(k==='descontoPct'||k==='frete')?Z(t.value):t.value;saveCart();renderTot()});
+function resumo(p,num){const t=totals(p),sinal=Math.round(t.total*(Z(loja.sinalPct)||50))/100;
+  return `Olá${p.cliente?', '+p.cliente.split(' ')[0]:''}! Resumo do pedido${num?' '+num:''}:\n${p.itens.map(i=>`• ${nf(i.qtd,0)}× ${i.nome}${i.tipo!=='produto'?` (${i.componentes.map(c=>`${nf(c.qtd,0)}× ${c.nome}`).join(', ')})`:''} — ${brl(i.qtd*i.precoUnit)}`).join('\n')}\n${p.descontoPct?`Desconto: ${nf(p.descontoPct,0)}%\n`:''}${Z(p.frete)?`Entrega: ${brl(Z(p.frete))}\n`:''}*Total: ${brl(t.total)}*`
+    +(loja.pix?`\n\nPara confirmar, o sinal é de ${brl(sinal)} no Pix: ${loja.pix}`:'')+(loja.rodape?`\n\n${loja.rodape}`:'')}
+$('#ccopy').onclick=()=>{const p=priced();if(!p.itens.length){toast('O pedido está vazio');return}copyText(resumo(p))};
+$('#send').onclick=async()=>{const p=priced();if(!p.itens.length){toast('O pedido está vazio');return}if(!(cart.cliente||'').trim()){toast('Informe o nome do cliente');$('[data-c=cliente]').focus();return}
+  const id=db.newId(),now=new Date().toISOString(),t=totals(p);
+  const body={...p,status:'novo',criadoEm:now,subtotal:t.subtotal,total:t.total,pagamentos:[],feito:{},historico:[{em:now,status:'novo',por:who.email||''}],criadoPelaArea:true,vendedor:'',vendedorNome:'',comissaoPct:0};
+  try{$('#send').disabled=true;const r=await db.put('pedidos',id,body);const num='#'+String(r.numero||'').padStart(4,'0');
+    const txt=resumo(p,num);cart=blankCart();saveCart();renderCart();await reloadMeus();go('meus');toast(`Pedido ${num} enviado`);
+    setTimeout(()=>{if(confirm(`Pedido ${num} enviado. Copiar o resumo para mandar ao cliente?`))copyText(txt)},300)}
+  catch(e){toast(e.message==='sem_itens'?'Itens indisponíveis no catálogo':'Não foi possível enviar. Tente de novo.')}
+  finally{$('#send').disabled=false}};
+
+/* ---------- meus pedidos ---------- */
+async function reloadMeus(){const m=await db.list('pedidos');meus=who.role==='vendedor'?m:m.filter(o=>o.criadoPelaArea);renderMeus()}
+function renderMeus(){
+  const l=[...meus].sort((a,b)=>Z(b.numero)-Z(a.numero));const at=l.filter(o=>o.status!=='cancelado');
+  const mes=new Date().toISOString().slice(0,7),doMes=at.filter(o=>(o.criadoEm||'').startsWith(mes));
+  const com=o=>(Z(o.total)-Z(o.frete))*Z(o.comissaoPct)/100;
+  $('#mk').innerHTML=`<div><small>Pedidos no mês</small><b>${doMes.length}</b></div><div><small>Vendido no mês</small><b>${brl(doMes.reduce((a,o)=>a+Z(o.total),0))}</b></div>
+    <div><small>Comissão no mês</small><b>${brl(doMes.reduce((a,o)=>a+com(o),0))}</b></div><div><small>Em andamento</small><b>${at.filter(o=>o.status!=='entregue').length}</b></div>`;
+  $('#t-meus').innerHTML=l.length?l.map(o=>{const pg=pagStatus(o);return `<tr><td class="num">${numero(o)}</td><td class="num muted">${o.criadoEm?new Date(o.criadoEm).toLocaleDateString('pt-BR'):''}</td><td>${esc(o.cliente)}</td>
+    <td class="muted" style="max-width:260px">${esc(itemResumo(o))}</td><td>${esc(etapaNome(o.status||'novo'))}</td><td><span class="badge ${pg.cls}">${esc(pg.nome)}</span></td>
+    <td class="num">${brl(Z(o.total))}</td><td class="num">${brl(com(o))}</td>
+    <td>${o.status==='novo'?`<button class="btn" type="button" data-cancel="${esc(o.id)}">Cancelar</button>`:''}</td></tr>`}).join('')
+    :'<tr><td colspan="9" class="muted" style="padding:14px">Nenhum pedido enviado ainda.</td></tr>';
+}
+$('#t-meus').addEventListener('click',e=>{const b=e.target.closest('[data-cancel]');if(!b)return;
+  arm(b,'c'+b.dataset.cancel,async()=>{try{if(who.role==='vendedor')await db.del('pedidos',b.dataset.cancel);
+    else{const o=meus.find(x=>x.id===b.dataset.cancel);await db.put('pedidos',o.id,{...o,status:'cancelado'})}await reloadMeus();toast('Pedido cancelado')}catch(_){toast('Não foi possível cancelar')}})});
+
+/* ---------- abas ---------- */
+const VIEWS=['catalogo','montar','pedido','meus'];
+function go(v){view=VIEWS.includes(v)?v:'catalogo';VIEWS.forEach(x=>$('#v-'+x).hidden=x!==view);$$('#tabs button').forEach(b=>b.setAttribute('aria-selected',b.dataset.v===view))}
+$('#tabs').addEventListener('click',e=>{const b=e.target.closest('button[data-v]');if(b)go(b.dataset.v)});
+
+C3.nav('vendedor',{adminOnly:false}).then(w=>{who=w;if(w.role)load()});
+})();
+</script>
+</body>
+</html>
